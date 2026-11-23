@@ -1244,6 +1244,7 @@ pure val amountValues = Set(0, 1)`;
     fs.writeFileSync(receipt, JSON.stringify({ fingerprint: testInputs(root) }));
     const reused = await run(root);
     assert.ok(reused.said("tests", /^pass: the test runner recorded success for these inputs\n$/), reused.text);
+    assert.equal(reused.said("tests", /^1 tests cite no story or rule/)?.ok, false, reused.text);
     assert.equal(runs(), 3);
     fs.writeFileSync(path.join(root, "src/door.ts"), "export const door = 3;\n");
     await run(root);
@@ -2704,7 +2705,7 @@ function eachCheck() {
     assert.deepEqual(reworded.after, reworded.before, "rewording a comment in a tool every stage and every run of a tool rests on keys nothing anew");
     const rerun = await named("run.ts");
     assert.ok(Object.keys(rerun.before).every((stage) => rerun.after[stage] !== rerun.before[stage]), "a change to its code keys every one anew");
-    for (const tool of ["explore.ts", "stories/emit.ts", "design/tokens.ts", "testing/vitest.ts"]) {
+    for (const tool of ["explore.ts", "stories/emit.ts", "design/tokens.ts", "testing/vitest.ts", "testing/check.ts"]) {
       const { before, after } = await named(tool);
       assert.equal(after.simulate, before.simulate, `a simulation is not keyed by ${tool}, which it does not run`);
       assert.notEqual(after.tests, before.tests, `tests may run any of the tools, ${tool} among them`);
@@ -2712,7 +2713,7 @@ function eachCheck() {
     }
     const proving = await named("prove.ts");
     assert.deepEqual([proving.after.tests !== proving.before.tests, proving.after.explore !== proving.before.explore], [true, false], "an exploration is not keyed by a tool it does not run");
-    for (const tool of ["units.ts", "gen/harness.ts", "testing/profile.ts"]) {
+    for (const tool of ["units.ts", "util.ts", "gen/harness.ts", "testing/profile.ts"]) {
       const { before, after } = await named(tool);
       assert.notEqual(after.simulate, before.simulate, `a simulation is keyed by ${tool}, which it runs`);
     }
