@@ -134,7 +134,7 @@ jobs:
           read -ra tasks <<< "$TASKS"
           options=()
           if [[ $JOB == verify ]]; then
-            options+=(--log-order=stream)
+            options+=(--log-order=stream --concurrency=4)
             config=.cache/verify-turbo.json
             if [[ $GITHUB_REPOSITORY == lalalune/vibestack && -z ${TURBO_ROOT_TURBO_JSON+x} && ! -e turbo.jsonc && ! -L turbo.jsonc &&
               -d spec/app && -f apps/app/package.json && ! -e apps/app/spec && ! -e apps/app/turbo.json && ! -e apps/app/turbo.jsonc ]] &&
