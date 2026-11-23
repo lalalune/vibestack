@@ -245,12 +245,13 @@ actions to verify the whole project.
 For a transfer between trusted runners, call `prepareSimulationReceipts` with
 the same three arguments and an existing private scratch directory as the
 fourth. It returns `results` and, when all requested simulations passed and
-their receipts are complete, `seedDirectory`. Transfer only the files in that
-returned directory. They hold the model typechecks and simulation results the
-ordinary check can reuse. Copy them into the receiving project's `.spec-cache`
-before the full normal check. Match the checkout and toolchain, and keep the
-seed within the same trust boundary as other spec cache entries. The check
-computes its own keys and recomputes a missing or unreadable result.
+their receipts are complete, `seedDirectory`. Otherwise `partialDirectory`
+can hold the certified model typechecks and simulation results available from
+the run, including reproducible failures. Transfer only the files in the
+returned directory. Copy them into the receiving project's `.spec-cache`
+before the full normal check and keep them within the same trust boundary as
+other spec cache entries. The check computes its own keys and recomputes a
+missing or unreadable result.
 
 Turborepo caches `gen`, `build`, `typecheck`, tests, selftest and lint according
 to `turbo.json`. The task entry point fingerprints Node, VibeLang, Dafny, Z3
@@ -414,11 +415,13 @@ configured scopes are in `knip.config.js`, `.madgerc`, `.jscpd.json` and
 | A `v*` tag (`release.yml`) | Build, `pnpm pack`, the prerequisites and `pnpm selftest --only --concurrency=1` read from the shared cache, and the tarball attached to a GitHub release |
 
 This repository runs its six root specs in the ordinary check. Consumer
-workflows using the four simulation jobs assign modules by file hash. A complete
-shard transfers its simulation and imported typecheck receipts. An incomplete
-shard transfers the new simulation aggregates it produced and reports its failures.
-The ordinary check keeps its restored receipts, imports missing keys on which the
-shards agree, and computes the rest.
+workflows using the four simulation jobs assign modules by file hash. Each
+shard can fill gaps in its restored spec cache from a previous run of the same
+shard layout and lockfile. When the shard produces new simulation aggregates,
+it saves its certified snapshot for later runs, even if a rule failed. It also
+transfers the available receipts to the ordinary check and reports failures.
+The check keeps its restored receipts, imports missing keys on which the shards
+agree, and computes the rest.
 
 In the canonical `ci.yml` workspace, simulation precompute installs the root
 tool workspace's production dependencies. The root prepare script leaves
