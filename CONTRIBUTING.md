@@ -420,9 +420,9 @@ shard transfers the new simulation aggregates it produced and reports its failur
 The ordinary check keeps its restored receipts, imports missing keys on which the
 shards agree, and computes the rest.
 
-The precompute jobs skip the root install's build and generation only during
-the canonical `ci.yml` preparation in its workspace. Other workflows, manual
-commands and nested packages keep their declared install work.
+In the canonical `ci.yml` workspace, simulation precompute installs the root
+tool workspace's production dependencies. The root prepare script leaves
+application builds and generation to verification.
 
 Each row's budget is in [Seeds and budgets](#seeds-and-budgets). A failing
 run keeps `test/counterexamples/` and `test/__traces__/`, where a broken
