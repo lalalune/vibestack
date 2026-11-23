@@ -435,7 +435,7 @@ tool runs, any other the spec cache of the root, each workspace package and each
 lockfile and the commit. A job tries both key layouts for its own name and current lockfile, then tries the current
 layout for another lockfile. Selftest jobs on pull requests first try an archive for that pull request and lockfile.
 A successful replay of the entire fixture task can reuse that archive when setup leaves the cached evaluator intact.
-Fixture jobs also restore their pull request’s Turbo archive before the shared fallback. A full replay keeps that archive if its contents stayed unchanged and no files need pruning.
+Fixture jobs restore their pull request’s Turbo archive before the shared fallback. A full replay keeps that archive when the cached files stay unchanged and no files need pruning. Turbo refreshes its checkout-specific restore manifests locally.
 Each entry is named by the tools and inputs that produced it, so a job reads only the entries that still apply.
 Nightly jobs restore the pinned Quint evaluator and run with fresh verification
 results.
@@ -446,10 +446,11 @@ Turborepo shares task results through the private Cloudflare/R2 cache.
 The task entry point disables Turbo telemetry. On a shared machine, each `selftest:tools` task waits for the root and
 Studio tests. In CI, the verify job owns those integration tests. Each dedicated shard runs with Turbo's
 `--only` after setup has built the toolchain. Its cache key covers its own declared source inputs.
-Verification and release install the headless shell for Playwright and full
-Chromium for Bombadil. In CI, shard A installs full Chromium when its Bombadil
-journey runs. Its nightly job installs it during setup. The other tool shards
-run without a browser.
+CI verification installs the headless shell for Playwright. An exploration
+or replay that runs Bombadil installs full Chromium on first use. CI shard A
+installs full Chromium when its Bombadil journey runs. Its nightly job installs
+it during setup. The other tool shards run without a browser. Release installs
+both browsers during setup.
 Release runs the prerequisite tasks once, then uses the same isolated shard keys as CI.
 Pull requests read shared results; only branch pushes receive the publishing
 credential, protected by the `turbo-cache-publish` environment's branch
