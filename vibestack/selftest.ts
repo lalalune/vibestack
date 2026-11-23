@@ -4075,7 +4075,8 @@ for (const mode of ["alive", "exited"]) {
   test("a check that is interrupted, or that exits, ends each tool it started and what the tool started, in its process group or out of it, as it ends a tool that writes too much", { skip: process.platform === "win32" }, async () => {
     const root = scratch({
       "short-watchdog.ts": read("vibestack/run.ts")
-        .replace(/^const WATCH = .*;$/m, "const WATCH = 100;"),
+        .replace(/^const WATCH = .*;$/m, "const WATCH = 100;")
+        .replace(/^const SLOTS = .*;$/m, "const SLOTS = 2;"),
       "inherited-output.mjs": `import { spawn } from "node:child_process";
 const mode = process.argv[2];
 const helper = spawn(process.execPath, ["hold-output.mjs", mode, String(process.pid)], {
@@ -4124,6 +4125,41 @@ try {
 }
 `,
       "tool.mjs": 'import { spawn } from "node:child_process";\nimport fs from "node:fs";\nconst started = [false, true].map((detached) => spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", detached }).pid);\nfs.writeFileSync(process.argv[2], `${process.pid} ${started.join(" ")} `);\nsetInterval(() => {}, 1000);\nconst flood = () => { while (process.stdout.write("x".repeat(1 << 20))); process.stdout.once("drain", flood); };\nif (process.argv[3]) flood();\n',
+      "cancel-check.mjs": `import assert from "node:assert/strict";
+import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
+import { exec } from "./short-watchdog.ts";
+const proof = new AbortController();
+const run = (args, signal) => exec(process.execPath, args, import.meta.dirname, undefined, undefined, signal);
+const alive = (pid) => { try { return process.kill(pid, 0); } catch (error) { if (error.code !== "ESRCH") throw error; return false; } };
+const until = async (ready) => {
+  const deadline = performance.now() + 15_000;
+  while (!ready() && performance.now() < deadline) await delay(25);
+  assert.ok(ready());
+};
+const completed = await run(["-e", "process.stdout.write('completed')"], proof.signal);
+const active = run(["tool.mjs", "proof"], proof.signal);
+const other = run(["-e", "const fs = require('node:fs'); fs.writeFileSync('other-ready', ''); setInterval(() => { if (fs.existsSync('other-release')) process.exit(0); }, 20)"]);
+const queued = run(["-e", "require('node:fs').writeFileSync('queued-proof', '')"], proof.signal);
+const following = run(["-e", "process.stdout.write('following')"]);
+try {
+  await until(() => fs.existsSync("other-ready") && fs.existsSync("proof") && fs.readFileSync("proof", "utf8").endsWith(" "));
+  const pids = fs.readFileSync("proof", "utf8").trim().split(" ").map(Number);
+  assert.ok(pids.every(alive));
+  proof.abort();
+  const [runningResult, queuedResult] = await Promise.all([active, queued]);
+  assert.ok(runningResult.stopped && queuedResult.stopped);
+  await until(() => pids.every((pid) => !alive(pid)));
+  assert.ok(!fs.existsSync("queued-proof"));
+  assert.equal(completed.stdout, "completed");
+  assert.equal(completed.stopped, undefined);
+  assert.equal((await following).stdout, "following");
+} finally {
+  proof.abort();
+  fs.writeFileSync("other-release", "");
+}
+assert.equal((await other).status, 0);
+`,
       "check.mjs": `import { exec } from ${JSON.stringify(path.join(project, "vibestack/run.ts"))};\nvoid exec(process.execPath, ["tool.mjs", process.argv[2]], import.meta.dirname);\nprocess.stdin.once("data", () => process.exit(3));\n`,
     });
     const running = (pid: number) => { try { return process.kill(pid, 0); } catch { return false; } };
@@ -4133,6 +4169,8 @@ try {
     await until(() => !flooding.some(running), () => `a tool stopped for its output left ${flooding.filter(running).join(" and ")} running`);
     const inherited = await exec(process.execPath, ["watchdog-check.mjs"], root);
     assert.equal(inherited.status, 0, inherited.stdout + inherited.stderr);
+    const canceled = await exec(process.execPath, ["cancel-check.mjs"], root);
+    assert.equal(canceled.status, 0, canceled.stdout + canceled.stderr);
     for (const how of ["SIGTERM", "SIGINT", "SIGHUP", "exit"] as const) {
       const checking = spawn(process.execPath, ["check.mjs", how], { cwd: root, stdio: ["pipe", "ignore", "inherit"] });
       const ended = new Promise((resolve) => checking.once("close", (code, signal) => resolve(signal ?? code)));
