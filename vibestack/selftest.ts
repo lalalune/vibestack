@@ -1490,6 +1490,7 @@ export effect function probe() {
     assert.ok(plain.said("proof", /not proved/), plain.text);
     // `every` reaches Dafny as a quantifier over the members, as `some` does, not as Std.Collections.Seq.All (print.ts, LIST_HELPERS).
     assert.match(fs.readFileSync(path.join(plainRoot, "gen/proof/shop/shop.dfy"), "utf8"), /\n  !\(\(exists l :: l in c\.lines && !\(\(exists t :: t in l\.tags && \(exists m :: m in c\.lines/);
+    assert.match(read("gen/proof/shop/shop.scaffold.dfy", plainRoot), /^lemma (\w+)_ensures\((\w+): Cart(?:, (\w+): \w+)*\)\n(?:  ensures .*\n)+\{\n  if inv\(\2\)(?: && \w+\(.*\))? \{\n    var after := \1\(\2.*\);\n  \}\n\}$/m, plain.text);
     // Once the unproved obligations are recorded, only the review is left.
     // Hand-written code proved against the shop says that it rests on what is simulated only there.
     assert.match(recording.said("proof", /^spec\/lock\.json: [1-9]\d* added, 0 removed\n/)?.detail ?? "", /^    \+ shop\.ts: /m, recording.text);
@@ -3756,9 +3757,9 @@ function theCommandLine() {
   });
 
   test("an obligation not proved names its rules and leaves a lemma to start from; its acceptance outlives a change of prose and not one of Quint", async () => {
-    const [root, shop] = [fixtures(["highest"], (f) => { delete f["spec/highest.proof.dfy"]; }), fixtures(["lib", "shop"])];
+    const root = fixtures(["highest"], (f) => { delete f["spec/highest.proof.dfy"]; });
     const rule = "Running maximum / The highest of a list is at least where it starts";
-    const [{ results }, machine] = await Promise.all([check(root), run(shop)]);
+    const { results } = await check(root);
     const unproved = results.find((r) => r.stage === "proof" && !r.ok);
     assert.deepEqual(unproved?.rules, [{ file: "spec/highest.md", key: rule }], results.map(show).join("\n"));
     assert.match(unproved!.detail, /gen\/proof\/highest\/highest\.scaffold\.dfy/);
@@ -3766,8 +3767,6 @@ function theCommandLine() {
     const scaffold = read("gen/proof/highest/highest.scaffold.dfy", root);
     assert.equal(scaffold, "lemma lawTheHighestIsAtLeastTheStart_ensures(xs: seq<int>, start: int)\n  ensures (lawTheHighestIsAtLeastTheStart(xs, start) == true)\n{\n}\n");
     assert.deepEqual(parseProofFile(scaffold, "spec/highest.proof.dfy").map((l) => l.name), ["lawTheHighestIsAtLeastTheStart_ensures"]);
-    // A transition's opens on what its obligations assume, with the state after it.
-    assert.match(read("gen/proof/shop/shop.scaffold.dfy", shop), /^lemma (\w+)_ensures\((\w+): Cart(?:, (\w+): \w+)*\)\n(?:  ensures .*\n)+\{\n  if inv\(\2\)(?: && \w+\(.*\))? \{\n    var after := \1\(\2.*\);\n  \}\n\}$/m, machine.text);
     // A simulated rule's result names it too.
     fs.writeFileSync(path.join(root, "spec/highest.md"), read("spec/highest.md", root).replace(">= start", "> start"));
     assert.deepEqual((await check(root)).results.find((r) => r.stage === "always" && !r.ok)?.rules, [{ file: "spec/highest.md", key: rule }]);
