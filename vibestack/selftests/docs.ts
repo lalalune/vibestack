@@ -312,4 +312,14 @@ async function verifyGenerationInputs(root: string) {
     fs.rmSync(path.join(directory, "old.proof.dfy"), { recursive: true });
     if (area !== "spec/kit") fs.rmdirSync(directory);
   }
+
+  const manifest = JSON.parse(read("package.json", root));
+  for (const scripts of [{ ...manifest.scripts, pregen: "node -e 0" }, { ...manifest.scripts, gen: "node custom-generator.mjs" }]) {
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ ...manifest, scripts }));
+    const attached = await generationPlan(selected);
+    fs.mkdirSync(standalone);
+    changed(attached, await generationPlan(selected), "a legacy generation task with a project-defined command or hook");
+    fs.rmdirSync(standalone);
+  }
+
 }
