@@ -1,167 +1,35 @@
-name: ci
-
-# Every run is the tasks of `pnpm verify`, the tools' own self-test included,
-# split over four jobs that run side by side: the self-test of the tools in
-# three, everything else in one. Turborepo and spec skip what the change does
-# not reach, from the cache of the last run. The fixed normal profile is the
-# same locally and in CI. The self-test also installs and checks each
-# standalone example.
+name: Producer lifecycle baseline
 on:
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened]
+    branches: [codex/producer-lifecycle-control-1123-safe]
+    paths: [.github/workflows/fuzz.yml]
   push:
-    branches: [main]
-
-concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_attempt == '1' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  TURBO_TELEMETRY_DISABLED: "1"
-
+    branches: [codex/producer-lifecycle-control-1123-safe]
+    paths: [.github/workflows/fuzz.yml]
+  workflow_dispatch:
 permissions:
   contents: read
-
+concurrency:
+  group: android-lifecycle-baseline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  verify:
-    name: ${{ matrix.name }}
+  runtime:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: verify
-            tasks: build typecheck test test:browser check //#lint:js //#lint:css //#analyze //#selftest:docs //#selftest:examples
-    environment: &cache-environment ${{ github.event_name == 'push' && 'turbo-cache-publish' || 'turbo-cache-read' }}
-    env: &cache-env
-      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-      TURBO_CACHE: ${{ secrets.TURBO_TOKEN != '' && (github.event_name == 'push' && 'local:rw,remote:rw' || 'local:rw,remote:r') || 'local:rw' }}
-    steps: &verification-steps
-      - uses: actions/checkout@v7
-      - id: setup
-        uses: ./.github/actions/setup
-        with:
-          job: ${{ matrix.name }}
-      - id: verify-tasks
-        run: node vibestack/spec.ts tasks ${{ matrix.tasks }} ${{ startsWith(matrix.name, 'selftest-') && '--only' || '' }} --continue=dependencies-successful --summarize ${{ matrix.name == 'verify' && '--log-order=stream' || '' }}
-      - name: Report Turbo task timings
-        id: task-timings
-        if: ${{ !cancelled() }}
+        abi: [arm64-v8a, x86_64]
+    steps:
+      - name: Hold a pull-request producer and record provenance
         env:
-          RESTORED_FIXTURE_EVALUATOR: ${{ steps.setup.outputs.spec-evaluator-restored == 'true' && steps.verify-tasks.outcome == 'success' }}
-          TASK: ${{ matrix.tasks }}
+          ABI: ${{ matrix.abi }}
         run: |
-          for report in .turbo/runs/*.json; do
-            [[ -f "$report" ]] || continue
-            jq -r '
-              select(.version == "1" and (.tasks | type == "array"))
-              | .execution as $run
-              | select([$run.startTime, $run.endTime, $run.cached, $run.attempted] | all(type == "number"))
-              | "### Turbo task timings", "",
-                "Wall time \(($run.endTime - $run.startTime) / 1000) s. Cache hits \($run.cached) of \($run.attempted) attempted tasks.",
-                "",
-                "| Task | Wall time (s) | Cache | Exit code |",
-                "| --- | ---: | --- | ---: |",
-                ([.tasks[]
-                  | select([.execution.startTime, .execution.endTime] | all(type == "number"))
-                  | {id: .taskId, elapsed: ((.execution.endTime - .execution.startTime) / 1000), cache: .cache.status, exit: .execution.exitCode}]
-                  | sort_by(-.elapsed) | .[]
-                  | "| \(.id) | \(.elapsed) | \(.cache // "-") | \(.exit // "-") |"),
-                ""
-            ' "$report" >> "$GITHUB_STEP_SUMMARY" || echo "::warning::Could not read the Turbo run summary"
-          done
-          [[ $RESTORED_FIXTURE_EVALUATOR == true ]] || exit 0
-          shopt -s nullglob
-          reports=(.turbo/runs/*.json)
-          (( ${#reports[@]} )) || exit 0
-          jq -es --arg task "$TASK" '
-            map(select(.version == "1" and any(.tasks[]?; .taskId == $task)))
-            | length == 1 and
-              (.[0] | .execution.exitCode == 0 and .execution.attempted == 1 and .execution.cached == 1 and
-                (.tasks | length == 1 and (.[0] | .taskId == $task and .cache.status == "HIT" and
-                  .execution.exitCode == 0 and .resolvedTaskDefinition.outputs == [])))
-          ' "${reports[@]}" >/dev/null || exit 0
-          echo 'skip-spec-cache=true' >> "$GITHUB_OUTPUT"
-          echo 'Skipping the spec cache upload after a full fixture replay.'
-      - id: superseded-spec-cache
-        if: >-
-          cancelled() && matrix.name == 'verify' && steps.verify-tasks.conclusion == 'cancelled' &&
-          steps.setup.outputs.spec-cache-key != '' &&
-          github.event_name == 'push' && github.run_attempt == '1' &&
-          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        shell: bash
-        run: |
-          current=$(GIT_TERMINAL_PROMPT=0 timeout 4s git ls-remote --refs --exit-code origin "$GITHUB_REF") || exit 0
-          [[ $current != *$'\n'* ]] || exit 0
-          IFS=$'\t' read -r tip ref <<< "$current"
-          [[ $tip =~ ^[0-9a-f]{40}$ && $ref == "$GITHUB_REF" && $tip != "$GITHUB_SHA" ]] || exit 0
-          echo 'skip=true' >> "$GITHUB_OUTPUT"
-          echo "Skipping the spec cache upload for superseded commit $GITHUB_SHA."
-      - if: >-
-          always() && steps.setup.outputs.spec-cache-key != '' &&
-          steps.superseded-spec-cache.outputs.skip != 'true' && steps.task-timings.outputs.skip-spec-cache != 'true'
-        uses: actions/cache/save@v6
+          jq -n --arg sha "$GITHUB_SHA" --arg event "$GITHUB_EVENT_NAME" --arg abi "$ABI" '{sha:$sha,event:$event,abi:$abi}' > "$RUNNER_TEMP/receipt.json"
+          if [[ $GITHUB_EVENT_NAME == pull_request ]]; then sleep 150; fi
+      - uses: actions/upload-artifact@v7
         with:
-          path: ${{ steps.setup.outputs.spec-cache-path }}
-          key: ${{ steps.setup.outputs.spec-cache-key }}
-      - id: prune-turbo-cache
-        if: always() && steps.setup.outputs.turbo-cache-key != ''
-        run: |
-          [[ -d .turbo/cache ]] || exit 0
-          cat .turbo/runs/*.json 2>/dev/null | jq -r '.tasks[] | select(.cache.status == "HIT") | .hash' | while read -r hash; do find .turbo/cache -name "$hash*" -exec touch {} +; done
-          find .turbo/cache -type f -mtime +7 -delete
-          for archive in .turbo/cache/*.tar.zst; do
-            metadata="${archive%.tar.zst}-meta.json"
-            [[ -f "$archive" && -s "$archive" && -f "$metadata" && -s "$metadata" ]] || continue
-            echo "populated=true" >> "$GITHUB_OUTPUT"
-            break
-          done
-      - if: always() && steps.prune-turbo-cache.outputs.populated == 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: .turbo/cache
-          key: ${{ steps.setup.outputs.turbo-cache-key }}
-      - if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: proof-${{ matrix.name }}
-          path: |
-            gen/proof/
-            vibestack/studio/gen/proof/
-          if-no-files-found: ignore
-      - if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: failures-${{ matrix.name }}
-          path: |
-            test/counterexamples/
-            test/__traces__/
-            apps/*/test/counterexamples/
-            apps/*/test/__traces__/
-            packages/*/test/counterexamples/
-            packages/*/test/__traces__/
-            apps/*/.cache/vitest/attachments/
-            packages/*/.cache/vitest/attachments/
-            vibestack/studio/test/counterexamples/
-            vibestack/studio/test/__traces__/
-            vibestack/examples/*/test/counterexamples/
-            vibestack/examples/*/test/__traces__/
-          if-no-files-found: ignore
-          include-hidden-files: true
-
-  vibestack-fixture-selftests:
-    name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: selftest-a
-            tasks: //#selftest:tools:a
-          - name: selftest-b
-            tasks: //#selftest:tools:b
-          - name: selftest-rest
-            tasks: //#selftest:tools:rest
-    environment: *cache-environment
-    env: *cache-env
-    steps: *verification-steps
+          name: producer-baseline-${{ matrix.abi }}
+          path: ${{ runner.temp }}/receipt.json
+          retention-days: 3
