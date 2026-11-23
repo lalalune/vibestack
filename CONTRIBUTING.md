@@ -64,7 +64,8 @@ Pull requests go to `main`, the only long-lived branch; what CI runs on them is 
 | `vibestack/parse.ts`, `vibestack/review.ts` | literate specs and the review ledger |
 | `vibestack/cache.ts`, `vibestack/run.ts` | stage caches and bounded tool execution |
 | `vibestack/units.ts`, `vibestack/simulate.ts` | generation, proof units, simulation and replay |
-| `vibestack/util.ts` | source discovery, the `tests` stage and the rules it holds tests to, and citations |
+| `vibestack/util.ts` | source discovery, package fingerprints and citations |
+| `vibestack/testing/check.ts` | the `tests` stage and the rules it holds tests to |
 | `vibestack/gen/vibe.ts` | `gen/<name>.effect.vibe`, read off the generated TypeScript |
 | `vibestack/gen/react.ts` | `gen/<name>.react.ts` (`useMachine`), in a package that depends on React |
 | `vibestack/scan.ts` | how a spec's lines are read; imports nothing, so Studio's page uses it too |
