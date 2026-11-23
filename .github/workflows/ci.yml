@@ -87,6 +87,10 @@ jobs:
           mkdir -p .turbo/cache
           rm -f ".turbo/cache/$HASH-manifest.json"
           mv "$archive" "$meta" .turbo/cache/
+      - name: Materialize UI stories before tests
+        if: github.repository == 'lalalune/vibestack' && matrix.name == 'verify'
+        continue-on-error: true
+        run: node vibestack/spec.ts tasks '@repo/ui#gen'
       - id: verify-tasks
         env:
           JOB: ${{ matrix.name }}
