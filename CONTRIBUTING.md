@@ -254,7 +254,10 @@ other spec cache entries. The check computes its own keys and recomputes a
 missing or unreadable result.
 
 Turborepo caches `gen`, `build`, `typecheck`, tests, selftest and lint according
-to `turbo.json`. The task entry point fingerprints Node, VibeLang, Dafny, Z3
+to `turbo.json`. When a legacy generation config excludes proof paths, the
+task entry point includes the spec ownership layout and any Markdown under
+those proof-named directories in the generation key. Dependent task keys
+follow these changes. The task entry point fingerprints Node, VibeLang, Dafny, Z3
 and their runtime files before Turbo hashes its inputs. A build can run
 without the verifier. Its task key records missing verification tools,
 and a proof still requires them. What it reads of an
