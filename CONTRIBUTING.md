@@ -17,7 +17,7 @@ The specs of every package are in the one tree at the root ([SPEC.md, "One spec 
 [Architecture](#architecture) maps what is generated from what, which test is for what, and the
 budgets and CI.
 
-A package states what it offers in `exports`; import a package by name, never by a path into its `src/`. Domain code
+A package exposes its code only through its root barrel (`"."` in `exports`), plus explicit non-code static assets such as `.css` and `.json`; no code subpaths or wildcards. Import a workspace package by name (or a declared static asset path), never by a code subpath or into its `src/`. Domain code
 does not import React, and a UI package holds no business rules. A shared type lives with the contract that owns it.
 
 | Command | Does |
@@ -78,6 +78,7 @@ Pull requests go to `main`, the only long-lived branch; what CI runs on them is 
 | `vibestack/conformance.ts` | the comparing: journeys, malformed-input probes, walks, shrinking and replay; copied into `gen/` for a driver's types |
 | `vibestack/testing/` | what packages import: `project()` (the Vitest configuration), the property-test generator, `effectDriver` |
 | `vibestack/stories/`, `vibestack/design/` | generated stories and their tests; design tokens and their lint rules. The design project module in [`vibestack/design/project.ts`](vibestack/design/project.ts) builds or checks several token directories in one process. |
+| `vibestack/eslint.ts` | `withWorkspaceBarrels`: ESLint rules enforcing barrel-only workspace `exports` and imports, with per-file ratchets |
 | `vibestack/gen.ts` | the translator: reads what a module imports and defines |
 | `vibestack/gen/types.ts` | everything decided by a type |
 | `vibestack/gen/print.ts` | expressions |
@@ -397,7 +398,11 @@ compare screenshots.
 Asynchronous Effect programs are tested, not proved. Each `proof` line says
 how many obligations are proved and how many are simulated only.
 
-ESLint enforces package exports and the stack boundaries, and in `apps/` and
+ESLint enforces workspace barrel exports (`barrel/exports` on workspace
+`package.json` manifests, including `publishConfig.exports`, and
+`barrel/no-subpath-imports` on code files, via `withWorkspaceBarrels` in
+`vibestack/eslint.ts` with `allowExports` / `allowImports` ratchets for
+adopting repositories) and the stack boundaries, and in `apps/` and
 `packages/` the code rules of AGENTS.md, "Writing code": no comment but a spec
 citation or tool directive, no effect hook, timer or `console`, and no inline
 config but a reasoned `eslint-disable` of another rule. `commented` and
