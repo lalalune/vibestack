@@ -1,33 +1,36 @@
-name: release
-
-# A v* tag that names the version in package.json builds the packaged `spec`
-# command, runs the tools' self-test through the shared cache, where CI has
-# already verified the commit, one task at a time where it has not, since one
-# runner is too small for all five at once, and attaches the tarball to a GitHub release
-# (CONTRIBUTING.md, "Releasing").
+name: Producer lifecycle candidate
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [codex/producer-lifecycle-control-1123-merged-only]
+    paths: [.github/workflows/fuzz.yml]
   push:
-    tags: ["v*"]
-
+    branches: [codex/producer-lifecycle-control-1123-merged-only]
+    paths: [.github/workflows/fuzz.yml]
+  workflow_dispatch:
 permissions:
-  contents: write
-
+  contents: read
+concurrency:
+  group: android-lifecycle-candidate-${{ github.event.action == 'closed' && (github.event.pull_request.merged != true || github.run_attempt != '1') && format('close-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'pull_request' && format('pr-{0}', github.event.number || github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  release:
+  runtime:
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: turbo-cache-read
-    env:
-      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-      TURBO_CACHE: local:rw,remote:r
-      TURBO_TELEMETRY_DISABLED: "1"
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
     steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-      - run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
-      - run: pnpm pack --pack-destination "$RUNNER_TEMP"
-      - run: pnpm all //#test vibestack-studio#typecheck vibestack-studio#test vibestack-studio#test:browser --concurrency=1
-      - run: pnpm selftest --only --concurrency=1
-      - run: gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/vibestack-${GITHUB_REF_NAME#v}.tgz" --verify-tag --generate-notes
+      - name: Hold a pull-request producer and record provenance
         env:
-          GH_TOKEN: ${{ github.token }}
+          ABI: ${{ matrix.abi }}
+        run: |
+          jq -n --arg sha "$GITHUB_SHA" --arg event "$GITHUB_EVENT_NAME" --arg abi "$ABI" '{sha:$sha,event:$event,abi:$abi}' > "$RUNNER_TEMP/receipt.json"
+          if [[ $GITHUB_EVENT_NAME == pull_request ]]; then sleep 150; fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: producer-candidate-${{ matrix.abi }}
+          path: ${{ runner.temp }}/receipt.json
+          retention-days: 3
