@@ -11,7 +11,7 @@ import { type Plan, type Story, plan } from "./variants.ts";
 export type { Prop, Story };
 
 /** Part of every hash: raise it when the same inputs would be written differently. */
-const VERSION = 7;
+const VERSION = 9;
 
 export interface Component {
   id: string;
@@ -24,6 +24,10 @@ export interface Component {
   stories: Story[];
   model?: { spec: string; module: string; state: string; events: string[] };
   design?: string[];
+  part?: string;
+  children?: string[];
+  citations?: { spec: string; heading: string }[];
+  uses?: string[];
   diagnostics: string[];
 }
 /** `catalog.json`. */
@@ -44,10 +48,10 @@ const COMPONENTS = ["src/**/*.tsx", "packages/*/src/**/*.tsx"];
 export const outOf = (root: string) => join(root, "generated", "stories");
 /** What each source gave, kept in a hidden directory, which no stage's key reads: it changes when only its inputs' hashes do. */
 const MANIFEST = ".cache/manifest.json";
-/** Whether a changed path can change the stories: the project's source and tsconfig, outside `out`, dot-directories and `node_modules`. */
+/** Whether a changed path can change the stories. */
 export const watched = (root: string, out = outOf(root)) => (file: string) => {
   const path = relative(root, resolve(root, file));
-  return /\.tsx?$|^tsconfig\.json$/.test(path) && !/(^|[\\/])(node_modules|\.[^\\/]+)[\\/]/.test(path) && relative(resolve(root, out), resolve(root, file)).startsWith("..");
+  return /\.tsx?$|^tsconfig\.json$|(^|[\\/])package\.json$/.test(path) && !/(^|[\\/])(node_modules|\.[^\\/]+)[\\/]/.test(path) && relative(resolve(root, out), resolve(root, file)).startsWith("..");
 };
 /** A listener for changed paths: it runs `run` once they go quiet, and reports what `run` throws so the next change is still heard. */
 export function listener(root: string, out: string | undefined, run: () => void): (file: string) => void {
@@ -235,6 +239,10 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): () =>
           stories: p.catalog,
           ...(c.model ? { model: { spec: c.model.spec, module: c.model.module, state: c.model.state, events: c.model.events } } : {}),
           ...(c.design.length ? { design: c.design } : {}),
+          ...(c.part ? { part: c.part } : {}),
+          ...(c.children?.length ? { children: c.children } : {}),
+          ...(c.citations?.length ? { citations: c.citations } : {}),
+          ...(c.uses?.length ? { uses: c.uses } : {}),
           diagnostics: p.diagnostics,
         })))),
       };
