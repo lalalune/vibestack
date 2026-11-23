@@ -327,6 +327,10 @@ to tasks so they use the selected evaluator. Its bytes determine the fingerprint
 In CI, a Turborepo cache entry is
 kept for seven days after its last hit, which the run summary names.
 
+The shared Dafny library is a direct input of the tool package build and the
+Studio tests that run proofs. An edit to that library leaves the application
+build keys unchanged.
+
 ### Seeds and budgets
 
 `vibestack/testing/profile.ts` is the one source of the fixed profiles:
