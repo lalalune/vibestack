@@ -420,8 +420,14 @@ configured scopes are in `knip.config.js`, `.madgerc`, `.jscpd.json` and
 This repository runs its six root specs in the ordinary check. Consumer
 workflows using the four simulation jobs assign modules by file hash. Each
 shard can fill gaps in its restored spec cache from a previous run of the same
-shard layout and lockfile. When the shard produces new simulation aggregates,
-it saves its certified snapshot for later runs, even if a rule failed. It also
+shard layout and lockfile. When a pull request starts native simulations, it
+can also read that shard’s published receipts from the push to its exact base
+commit while ordinary verification runs. Queued models can reuse receipts
+that arrive before they start. A missing or unavailable archive leaves the
+ordinary computation running. When the shard produces new simulation
+aggregates, it saves its certified snapshot for later runs, even if a rule
+failed. A late import only needs another save when its final snapshot has
+no visible cache with the same content fingerprint. It also
 transfers the available receipts to the ordinary check and reports failures.
 The check keeps its restored receipts, imports missing keys on which the shards
 agree, and computes the rest.
