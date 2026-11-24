@@ -275,6 +275,7 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
   let configured = new Map<string, string | undefined>();
   let configLookups: Lookup[] = [];
   let build: ReturnType<typeof programs>;
+  let previous: { manifest: string; catalog: string; smoke: string; browser: string; preview?: string } | undefined;
   let built: ReturnType<ReturnType<typeof programs>> | undefined;
   const rel = (file: string) => relative(root, file).replaceAll("\\", "/");
   const from = (file: string) => JSON.stringify(relative(out, file).replaceAll("\\", "/").replace(/^(?!\.)/, "./"));
@@ -316,7 +317,8 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
   return (observe?: (file: string) => void) => {
     built = undefined;
     const manifest = join(out, MANIFEST);
-    const known: Record<string, Entry> = existsSync(manifest) ? JSON.parse(readFileSync(manifest, "utf8")) : {};
+    const saved = existsSync(manifest) ? readFileSync(manifest, "utf8") : undefined;
+    const known: Record<string, Entry> = saved === undefined ? {} : JSON.parse(saved);
     const written: string[] = [];
     const write = (name: string, text: string) => {
       if (existsSync(join(out, name)) && readFileSync(join(out, name), "utf8") === text) return;
@@ -408,14 +410,20 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
     };
     const outputs = Object.values(entries).flatMap((e) => e.outputs).sort();
     const tested = [...new Set([...outputs, ...Object.values(entries).flatMap((e) => e.manual.map((file) => relative(out, join(root, file)).replaceAll("\\", "/")))])].sort(compare);
-    write("catalog.json", `${JSON.stringify(index, null, 2)}\n`);
-    write("stories.test.tsx", smoke(tested));
     const preview = ["ts", "tsx", "js", "jsx"].map((ext) => join(root, ".storybook", `preview.${ext}`)).find((file) => {
       observe?.(file);
       return existsSync(file);
     });
-    write("stories.browser.test.tsx", browser(tested, preview && from(preview)));
-    write(MANIFEST, `${JSON.stringify(entries)}\n`);
+    if (!previous || previous.manifest !== saved || stale.length || files.length !== Object.keys(known).length || previous.preview !== preview) {
+      previous = {
+        manifest: `${JSON.stringify(entries)}\n`, catalog: `${JSON.stringify(index, null, 2)}\n`,
+        smoke: smoke(tested), browser: browser(tested, preview && from(preview)), preview,
+      };
+    }
+    write("catalog.json", previous.catalog);
+    write("stories.test.tsx", previous.smoke);
+    write("stories.browser.test.tsx", previous.browser);
+    write(MANIFEST, previous.manifest);
     const removed = (existsSync(out) ? readdirSync(out) : []).filter((name) => name.endsWith(".stories.tsx") && !outputs.includes(name));
     for (const name of removed) rmSync(join(out, name));
     return { index, written, removed, analyzed: stale.length, diagnostics: index.components.flatMap((c) => c.diagnostics) };
