@@ -87,7 +87,7 @@ describe("the documents name what exists", () => {
     const workspace = (file: string) => /^(apps|packages|spec)\//.test(file);
     const [shardA, shardB, packed] = tools;
     const toolInput = (file: string) => ![docsSource, examplesSource].includes(file)
-      && ((!workspace(file) && PACKED.includes(file)) || /^(vibestack\/(?!examples\/)|vibestack\/examples\/order\/|\.agents\/skills\/)/.test(file));
+      && ((!workspace(file) && !file.startsWith("patches/") && PACKED.includes(file)) || /^(vibestack\/(?!examples\/)|vibestack\/examples\/order\/|\.agents\/skills\/)/.test(file));
     assert.deepEqual({
       docs: missed(docs, () => true),
       examples: missed(examples, (file) => ![toolSource, docsSource, toolMetadata].includes(file) && /^vibestack\/(examples\/|(?!studio\/|fixtures\/|(testing|stories|design)\/test\/))/.test(file)),
@@ -168,6 +168,9 @@ describe("the documents name what exists", () => {
         fs.cpSync(path.join(project, file), destination, { verbatimSymlinks: true });
       }
     }
+    const patch = "patches/fixture.patch";
+    fs.mkdirSync(path.join(root, "patches"), { recursive: true });
+    fs.writeFileSync(path.join(root, patch), "a workspace dependency patch\n");
     const staged = await exec("git", ["add", "-A"], root);
     assert.equal(staged.status, 0, staged.stderr);
     const evaluatorHome = path.join(root, "custom quint home");
@@ -196,6 +199,7 @@ describe("the documents name what exists", () => {
     };
     const studio = (ids: string[]) => ids.filter((id) => /^(vibestack-studio#(?!check)|@repo\/(ui#(build|typecheck)|design-system#build)|\/\/#lint:css)/.test(id));
     const append = (file: string, text = "\nMore words.\n") => () => fs.appendFileSync(path.join(root, file), text);
+    assert.ok((await changedBy(append(patch))).includes("//#selftest:tools:rest"));
     const vibeDeclared = [...["packages", "apps"].flatMap(within), "vibestack/studio"]
       .filter((dir) => fs.existsSync(path.join(root, dir, "tsconfig.json")) && read(`${dir}/tsconfig.json`, root).includes(".vibe/declarations"))
       .map((dir) => `${JSON.parse(read(`${dir}/package.json`, root)).name}#typecheck`);
