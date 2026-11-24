@@ -1090,6 +1090,41 @@ pure def witnessStep_sometimesDone(n: int): int = n`;
     const rerun = await tool("quint", command.slice(command.indexOf("quint run ") + "quint ".length).split(" "), ordinary);
     assert.ok(violated(rerun), rerun.out);
 
+    const guardedPath = (first: string, target = "canFinish") => oneRule("gate", "Allow a reachable transition", [
+      "pure val initial: int = 0",
+      "pure def up(n: int, amount: int): int = n + amount",
+      "pure val amountValues = Set(1)",
+      "pure def canMark(n: int): bool = n >= 38",
+      "pure def mark(n: int): int = n + 1",
+      "pure def canFinish(n: int): bool = n >= 39",
+      "pure def finish(n: int): int = 0",
+      "pure def alwaysSafe(n: int): bool = n <= 500",
+      `pure val eval_witness_${target} = (("up", ${first}), "mark", "finish")`,
+    ].join("\n"));
+    const guidedGuard = async (root: string) => {
+      const spec = readSpecs(root)[0], model = await gen(root, spec);
+      const domain = await import(pathToFileURL(path.join(root, "gen/gate.ts")).href);
+      return simulation({ root, fresh: false, used: new Set() }, spec, [spec], model, domain, 1);
+    };
+    const direct = guardedPath("38"), stopped = guardedPath("1");
+    const [complete, fallback, bad] = await Promise.all([guidedGuard(direct), guidedGuard(stopped), guidedGuard(guardedPath("501"))]);
+    for (const result of [complete, fallback]) {
+      assert.ok(result.said.some((r) => r.ok && r.summary.includes("2 of 2 guards allow")), JSON.stringify(result.said));
+      assert.ok(result.said.some((r) => r.ok && r.stage === "replay"));
+    }
+    for (const event of [{ type: "up", amount: 38 }, { type: "mark" }, { type: "finish" }])
+      assert.ok(complete.tested?.events.some((actual) => isDeepStrictEqual(actual, event)), JSON.stringify(complete.tested?.events));
+    const positiveFile = (name: string) => `gen/traces/gate.never_allows_${name}.eval_${name}__1/0.itf.json`;
+    for (const guard of ["canMark", "canFinish"]) {
+      assert.ok(!fs.existsSync(path.join(direct, positiveFile(guard))));
+      assert.ok(fs.existsSync(path.join(stopped, positiveFile(guard))));
+    }
+    assert.ok(bad.said.some((r) => !r.ok && r.stage === "always" && r.detail.includes('up{"amount":501}')), JSON.stringify(bad.said));
+    for (const [root, error] of [
+      [guardedPath("38", "canMark"), /last transition must be guarded by canMark/],
+      [guardedPath("38", "canMissing"), /name a declared .*transition guard/],
+    ] as const) await assert.rejects(gen(root, readSpecs(root)[0]), error);
+
     const refusalSource = `type Clock = { elapsed: int }
 pure val initial: Clock = { elapsed: 0 }
 pure def canTick(c: Clock, amount: int): bool = amount >= 0
