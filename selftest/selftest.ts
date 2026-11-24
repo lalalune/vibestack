@@ -285,7 +285,7 @@ pure def selected(which: bool): Set[Field] = {
     assert.deepEqual(await explore(scratch({ "package.json": manifest({ start: "node server.js" }) }), remember), []);
     const [unserved, silent] = await Promise.all([
       explore(scratch({ "package.json": manifest({ build: "true" }), "index.html": page("") }), remember),
-      explore(scratch({ "package.json": manifest({ start: "node -e \"console.log('starting')\"" }), "index.html": page("") }), remember),
+      explore(scratch({ "package.json": manifest({ start: "node -e \"console.log('starting')\"" }), "index.html": page(""), "src/main.ts": 'import "../../";' }), () => assert.fail("an enclosing import must exercise the server again")),
     ]);
     assert.deepEqual(unserved.map(([ok, stage, summary]) => [ok, stage, summary]), [[false, "explore", "index.html is a page, and package.json has no start or dev script that serves it: add one that prints the address it serves at"]]);
     assert.deepEqual(silent.map(([ok, stage]) => [ok, stage]), [[false, "explore"]]);
@@ -1362,6 +1362,34 @@ pure val amountValues = Set(0, 1)`;
       "kit/parts/item-one.js": true, "kit/package.json": true,
       "app/gen/a.ts": true, "app/gen/b.ts": false, "aliased/gen/a.ts": true,
     }, "the page reads its code, the files and directories it names, what the packages it imports or runs export, and the generated modules it imports, or all of them where it names none; not what only its checks read, nor what a file it only scans imports");
+    const enclosing = scratch({
+      "package.json": '{"main":"./entry.js"}', "entry.js": 'export default "first";',
+      "app/package.json": "{}", "app/src/main.ts": 'import value from "../../";',
+      "app/vite.config.ts": 'export default { base: "./" };', "unrelated.txt": "outside the page",
+    });
+    const inner = path.join(enclosing, "app"), source = path.join(inner, "src/main.ts");
+    assert.equal(pageInputs(inner), undefined, "a relative import may read the enclosing package entry");
+    fs.writeFileSync(source, 'export const dir = new URL("../../", import.meta.url);');
+    assert.equal(pageInputs(inner), undefined, "a directory URL may be consumed dynamically");
+    fs.writeFileSync(source, 'import path from "node:path"; const dir = import.meta.dirname; export const parent = path.resolve(dir, "../../..");');
+    assert.equal(pageInputs(inner), undefined, "a computed path may alias the source directory");
+    fs.writeFileSync(source, 'export const valid = (part: string) => ![part].includes("..");');
+    const bounded = pageInputs(inner);
+    assert.ok(bounded, "a public Vite base does not read the directory");
+    fs.appendFileSync(path.join(enclosing, "unrelated.txt"), " unrelated edit");
+    assert.equal(pageInputs(inner), bounded);
+    fs.symlinkSync(enclosing, path.join(inner, "outer"), "dir");
+    fs.writeFileSync(path.join(inner, "src/main.css"), '@source "../outer";');
+    assert.equal(pageInputs(inner), undefined, "a symlinked Tailwind source is judged by its physical directory");
+    fs.writeFileSync(path.join(inner, "src/main.css"), '@source "../outer/**/*.html";');
+    assert.equal(pageInputs(inner), undefined, "an explicit Tailwind glob cannot be treated as a missing file");
+    fs.unlinkSync(path.join(inner, "outer"));
+    fs.mkdirSync(path.join(enclosing, "bounded"));
+    fs.symlinkSync(path.join(enclosing, "bounded"), path.join(inner, "outer"), "dir");
+    const retargeted = pageInputs(inner);
+    assert.ok(retargeted);
+    fs.writeFileSync(path.join(enclosing, "bounded/class.html"), '<p class="underline">');
+    assert.notEqual(pageInputs(inner), retargeted);
     const beforeBuild = pageInputs(page);
     const build = path.join(workspace, "kit/build");
     fs.mkdirSync(build);
@@ -2772,6 +2800,22 @@ function eachCheck() {
     fs.appendFileSync(path.join(root, "vibestack/review.ts"), "\nexport {};\n");
     assert.deepEqual([commented, await checked(pages)].map((after) => after.map((key: string, i: number) => key !== keys[i])), [[false, false], [true, false]],
       "a page that runs one of the tools reads the code of them all, not their comments, and a page that runs none reads none");
+    fs.renameSync(path.join(root, "vibestack"), path.join(root, "src"));
+    fs.writeFileSync(path.join(root, "package.json"), '{"name":"vibestack","type":"module"}');
+    fs.mkdirSync(path.join(root, "dist"));
+    fs.writeFileSync(path.join(root, "dist/skill-links.js"), 'if (import.meta.main) path.resolve(import.meta.dirname, "../");');
+    fs.writeFileSync(path.join(root, "dist/built-only.js"), "export default 1;");
+    fs.writeFileSync(path.join(root, "runs/src/main.ts"), 'import "../../dist/skill-links.js";');
+    const compiled = await checked(`
+      const { pageInputs } = await import("./src/explore.ts");
+      const key = pageInputs("runs"), plain = pageInputs("plain");
+      fs.appendFileSync("dist/built-only.js", "export const a=1;");
+      const changedHelper = pageInputs("runs");
+      fs.appendFileSync("dist/skill-links.js", "export const b=2;");
+      const changedEntry = pageInputs("runs");
+      console.log(JSON.stringify([typeof key, key !== changedHelper, changedEntry !== changedHelper, pageInputs("plain") === plain]));
+    `);
+    assert.deepEqual(compiled, ["string", true, true, true], "a page running built tools reads their actual entry and helpers independently of the source tools that check it");
   });
 
   test("a process that outlives a reinstall of Quint, as watch does, keys what it runs and simulates by the Quint installed now, and remembers its runs again", { skip: process.platform === "win32" }, async () => {

@@ -5,8 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { installedPackages } from "./cache.ts";
-import { toolScripts, toolsCode } from "./cache.ts";
+import { installedPackages, siblingToolArtifact, toolScripts, toolsCode } from "./cache.ts";
 import { chromiumForExplore } from "./chromium.ts";
 import { bin, exec, startGroup } from "./run.ts";
 import { profile, type TestProfile } from "./testing/profile.ts";
@@ -76,9 +75,9 @@ function offered(dir: string): string[] {
  * scans as text; what each workspace package its code imports, or its scripts run, offers; and, in turn, what those
  * name, the generated modules it imports among them, or all of them where its code names none, as through an alias.
  * A page that runs one of these tools may run any of them, as Studio's does, and reads the code of them all, as the
- * stages do (cache.ts).
+ * stages do (cache.ts). An unbounded enclosing directory has no reusable fingerprint.
  */
-export function pageInputs(root: string, mode: TestProfile = "normal"): string {
+export function pageInputs(root: string, mode: TestProfile = "normal"): string | undefined {
   const base = fs.realpathSync(root);
   /** Each file the page reads, and whether it runs, so that what it names is read too, or is only scanned as text. */
   const reads = new Map<string, boolean>();
@@ -96,16 +95,37 @@ export function pageInputs(root: string, mode: TestProfile = "normal"): string {
     read(path.join(dir, "package.json"), false);
     for (const file of offered(dir)) read(file, true);
   };
-  const follow = (from: string, name: string) => {
-    if (name.startsWith("./") || name.startsWith("../")) {
+  const sibling = siblingToolArtifact();
+  let complete = true;
+  const follow = (from: string, name: string, quoted?: RegExpMatchArray) => {
+    const before = quoted?.input?.slice(0, quoted.index);
+    const cssSource = from.endsWith(".css") && before !== undefined && /(?:@source(?:\s+not)?\s*|\bsource\(\s*)$/.test(before);
+    if (cssSource && quoted) {
+      const pattern = quoted[0].slice(1, -1);
+      const wildcard = pattern.search(/[*?{}[\]]/);
+      if (wildcard >= 0) name = path.dirname(pattern.slice(0, wildcard) + "*");
+    }
+    const bareDirectory = (name === "." || name === "..") && before !== undefined &&
+      /(?:\bfrom|\bimport|@import|\b(?:import|require(?:\.resolve)?|URL|opendir(?:Sync)?|readdir(?:Sync)?|glob(?:Sync)?)\s*\()\s*$/.test(before);
+    if (cssSource || bareDirectory || name.startsWith("./") || name.startsWith("../")) {
       const at = path.resolve(path.dirname(from), name);
       const file = SUFFIXES.map((suffix) => at + suffix).find(isFile);
-      const toBase = path.relative(at, base);
-      const enclosesBase = !toBase.startsWith("..") && !path.isAbsolute(toBase);
-      if (isDirectory(at) && !enclosesBase) for (const f of packageFiles(at, () => true)) {
-        const scanned = fs.realpathSync(path.join(at, f));
-        const own = path.relative(base, scanned).split(path.sep).join("/");
-        if (own.startsWith("../") || !checkedOnly(own)) read(scanned, false);
+      if (isDirectory(at)) {
+        const dir = fs.realpathSync(at);
+        const toBase = path.relative(dir, base);
+        if (toBase !== ".." && !toBase.startsWith(`..${path.sep}`) && !path.isAbsolute(toBase)) {
+          // Vite's public base is a URL. A directory import, Tailwind source or dynamically
+          // used directory URL may read the enclosing tree.
+          const publicBase = dir === base && /^vite\.config\.[cm]?[jt]s$/.test(path.basename(from)) && /\bbase\s*:\s*$/.test(before ?? "");
+          const toolPath = sibling?.scripts.has(from) && /\bpath\.(?:join|resolve)\(\s*(?:[\w$]+|import\.meta\.(?:dirname|filename))\s*,\s*$/.test(before ?? "");
+          if (!publicBase && !toolPath) complete = false;
+        } else {
+          for (const f of packageFiles(dir, () => true)) {
+            const scanned = fs.realpathSync(path.join(dir, f));
+            const own = path.relative(base, scanned).split(path.sep).join("/");
+            if (cssSource || own.startsWith("../") || !checkedOnly(own)) read(scanned, false);
+          }
+        }
       }
       if (file) read(fs.realpathSync(file), true);
       return;
@@ -129,17 +149,24 @@ export function pageInputs(root: string, mode: TestProfile = "normal"): string {
   const tools = new Set(toolScripts().map((tool) => fs.realpathSync(tool)));
   let next = 0;
   const walk = () => {
-    for (; next < queue.length; next++) if (!tools.has(queue[next]) && CODE.test(queue[next]) && path.basename(queue[next]) !== "package.json")
-      for (const [, , name] of fs.readFileSync(queue[next], "utf8").matchAll(QUOTED)) follow(queue[next], name);
+    for (; complete && next < queue.length; next++) if (!tools.has(queue[next]) && CODE.test(queue[next]) && path.basename(queue[next]) !== "package.json")
+      for (const match of fs.readFileSync(queue[next], "utf8").matchAll(QUOTED)) follow(queue[next], match[2], match);
   };
   walk();
+  if (!complete) return undefined;
   const gen = path.join(base, "gen");
   if (isDirectory(gen) && ![...reads.keys()].some((file) => path.dirname(file) === gen)) {
     for (const e of fs.readdirSync(gen, { withFileTypes: true })) if (e.isFile() && !e.name.endsWith(".qnt")) read(path.join(gen, e.name), true);
     walk();
   }
+  if (!complete) return undefined;
   const runsTools = [...tools].some((tool) => reads.has(tool));
   const hash = createHash("sha256").update(JSON.stringify(["page-v1", process.versions.node, process.platform, process.arch, profile(mode), runsTools && toolsCode()]));
+  if (sibling && [...reads.keys()].some((file) => sibling.scripts.has(file))) {
+    const bytes = sibling.digest();
+    if (bytes === undefined) return undefined;
+    hash.update(bytes);
+  }
   for (const [name, file] of [...reads.keys()].filter((file) => !tools.has(file)).map((file) => [path.relative(base, file).split(path.sep).join("/"), file]).sort(([a], [b]) => a.localeCompare(b))) {
     const bytes = fs.readFileSync(file);
     hash.update(`${name}\0${bytes.length}\0`).update(bytes);
@@ -246,15 +273,20 @@ export async function explore(directory: string, remember: Remember, mode: TestP
       results.push([true, "explore", `${page}: the replay of ${SAVED} ${again.kind === "held" ? "breaks nothing now" : "no longer applies to the page"}, so it was removed`, "", page]);
     }
     const { explore: seconds } = profile(mode);
-    const explorer = installedPackages(bin("bombadil", root), "@antithesishq/bombadil");
-    results.push(await remember(JSON.stringify([pageInputs(root, mode), explorer, script]), async (): Promise<Reported<"explore">> => {
+    const fingerprint = pageInputs(root, mode);
+    const run = async (): Promise<Reported<"explore">> => {
       fs.mkdirSync(path.dirname(saved), { recursive: true });
       const fresh = await served(root, script, resolved, (origin) => bombadil(root, origin, { seconds }, saved));
       if (fresh.kind !== "broke") drop();
       return fresh.kind === "held" ? [true, "explore", `${page}: ${fresh.actions} actions in ${seconds} s broke no property of ${specification} (${command})`, "", page]
         : fresh.kind === "broke" ? broke(fresh, "breaks")
         : failed(fresh.kind === "failed" ? fresh : { kind: "failed", why: "Bombadil could not explore the page", output: fresh.output });
-    }, ([ok]) => ok));
+    };
+    if (fingerprint === undefined) results.push(await run());
+    else {
+      const explorer = installedPackages(bin("bombadil", root), "@antithesishq/bombadil");
+      results.push(await remember(JSON.stringify([fingerprint, explorer, script]), run, ([ok]) => ok));
+    }
     return results;
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
