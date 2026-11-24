@@ -452,7 +452,6 @@ export function simulation(memory: Memory, spec: Spec, specs: Spec[], model: Mod
         if (evaluated && seen.has(evaluated.name)) seen.get(evaluated.name)![evaluated.result ? "allows" : "refuses"] = true;
       };
       traces.flat().forEach(observeGuard);
-      const focusedTraces: Step[][] = [];
       const routes = [...model.witness?.paths ?? []].filter(([goal, path]) => seen.has(goal) && path.some((name) => {
         const guard = guardOf.get(name);
         return guard && !seen.get(guard)!.allows;
@@ -465,7 +464,7 @@ export function simulation(memory: Memory, spec: Spec, specs: Spec[], model: Mod
         const trace = run.traces.find((steps) => isDeepStrictEqual(steps.flatMap(({ event }) => event ? [event.type] : []), path));
         if (!trace) throw new Error(`the simulator reported an allowance of ${goal} without its transition path (${run.again})`);
         trace.forEach(observeGuard);
-        focusedTraces.push(trace);
+        traces.push(trace);
       }
       const neverAllowed: { t: (typeof guarded)[number]; again?: string }[] = [];
       const neverRefused: string[] = [];
@@ -475,6 +474,7 @@ export function simulation(memory: Memory, spec: Spec, specs: Spec[], model: Mod
       const missing = guarded.flatMap((t) => (["allows", "refuses"] as const).filter((side) => !seen.get(t.guard!)![side]).map((side) => ({ t, side })));
       let positive: Harness | undefined;
       let refusal: Harness | undefined;
+      const refusalTraces: Step[][] = [];
       const searched = await allDone(missing.map(async ({ t, side }) => {
         const guard = t.guard!;
         if (!model.evals.some((v) => v.name === guard)) return;
@@ -501,7 +501,7 @@ export function simulation(memory: Memory, spec: Spec, specs: Spec[], model: Mod
           if (focused) {
             if (!run.traces.some((trace) => trace.some(({ evaluated }) => evaluated?.name === t.guard && evaluated?.result === false)))
               throw new Error(`the simulator reported a refusal of ${t.guard} with no matching trace (${run.again})`);
-            focusedTraces.push(...run.traces);
+            refusalTraces.push(...run.traces);
           } else traces.push(...run.traces);
           seen.get(t.guard!)![side] = true;
         } else if (side === "refuses") neverRefused.push(t.guard!);
@@ -549,7 +549,7 @@ export function simulation(memory: Memory, spec: Spec, specs: Spec[], model: Mod
       if (guarded.some((t) => seen.get(t.guard!)!.allows))
         say(true, "sometimes", `${guarded.filter((t) => seen.get(t.guard!)!.allows).length} of ${guarded.length} guards allow their event in some reachable state`
           + (neverRefused.length ? `; never seen to refuse it within ${STEPS} events or for any value tried, so check that each restricts what its rule says: ${neverRefused.join(", ")}` : ", and refuse it in another"));
-      const replayed = focusedTraces.length ? [...traces, ...focusedTraces] : traces;
+      const replayed = refusalTraces.length ? [...traces, ...refusalTraces] : traces;
       for (const t of replayed) replay(domain, t, model);
       const compared = new Set(replayed.flatMap((t) => t.flatMap((s) => (s.evaluated ? [s.evaluated.name] : []))));
       const missed = [...model.evals.map((v) => v.name).filter((n) => !compared.has(n)), ...model.uncompared];

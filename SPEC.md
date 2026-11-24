@@ -146,7 +146,8 @@ An `eval_witness_<guard>` uses the same transition syntax. Its last transition
 must have the named guard. When an allowance along the path is still missing,
 Quint tries the path from the initial state. A completed path shows each fired
 transition's guard allowed it. The checker replays the path through generated
-TypeScript and runs the usual search for each allowance still missing. A state
+TypeScript, includes the fired events in the conformance inputs, and runs the
+usual search for each allowance still missing. A state
 or step rule broken along the path fails the check.
 
 An `eval_refuse_<guard>` record has one field for each of the guard's

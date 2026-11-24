@@ -1112,6 +1112,8 @@ pure def witnessStep_sometimesDone(n: int): int = n`;
       assert.ok(result.said.some((r) => r.ok && r.summary.includes("2 of 2 guards allow")), JSON.stringify(result.said));
       assert.ok(result.said.some((r) => r.ok && r.stage === "replay"));
     }
+    for (const event of [{ type: "up", amount: 38 }, { type: "mark" }, { type: "finish" }])
+      assert.ok(complete.tested?.events.some((actual) => isDeepStrictEqual(actual, event)), JSON.stringify(complete.tested?.events));
     const positiveFile = (name: string) => `gen/traces/gate.never_allows_${name}.eval_${name}__1/0.itf.json`;
     for (const guard of ["canMark", "canFinish"]) {
       assert.ok(!fs.existsSync(path.join(direct, positiveFile(guard))));
