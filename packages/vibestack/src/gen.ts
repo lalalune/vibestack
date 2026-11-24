@@ -51,7 +51,7 @@ export interface Model extends Roles {
   harness: string;
   guardHarness: string;
   guideNames: readonly string[];
-  witness?: { harness: string; lengths: Map<string, number> };
+  witness?: { harness: string; paths: Map<string, string[]> };
   refusal?: { harness: string; guards: ReadonlySet<string> };
 }
 
@@ -77,7 +77,8 @@ function concreteWitnesses(defs: Json[], roles: Roles, at: (name: string) => str
   const count = (t: Roles["transitions"][number]) => t.params.length + Number(!!roles.sender && !t.params.some((p) => p.name === SENDER));
   const stepsFor = (def: Json) => {
     const target: string = def.name.slice(WITNESS_PREFIX.length);
-    if (!roles.sometimes.includes(target)) fail(`${at(def.name)}: name a declared \`sometimes\` rule after \`${WITNESS_PREFIX}\``);
+    const guard = roles.transitions.some((t) => t.guard === target);
+    if (!guard && !roles.sometimes.includes(target)) fail(`${at(def.name)}: name a declared \`sometimes\` rule or transition guard after \`${WITNESS_PREFIX}\``);
     const items = tuple(def.expr);
     const first = items?.[0];
     const event = first?.kind === "str" && transitions.get(first.value);
@@ -91,6 +92,7 @@ function concreteWitnesses(defs: Json[], roles: Roles, at: (name: string) => str
       return { transition, args: args.map((_, i) => `${reference}._${i + 2}`) };
     });
     if (!steps.length) fail(`${at(def.name)}: give at least one transition`);
+    if (guard && steps.at(-1)?.transition.guard !== target) fail(`${at(def.name)}: the last transition must be guarded by ${target}`);
     return [target, steps] as const;
   };
   return new Map(defs.map(stepsFor));
@@ -297,7 +299,7 @@ export function generate(ir: Json, name: string, source: string, origin: (def: s
   const witnesses = concreteWitnesses(examples, roles, at);
   const witness = witnesses.size ? {
     harness: harness(name, source, [...imports, ...typeOnly], funs, sig, samples, roles, types, { weights, fair }, witnesses).text,
-    lengths: new Map([...witnesses].map(([goal, steps]) => [goal, steps.length])),
+    paths: new Map([...witnesses].map(([goal, steps]) => [goal, steps.map(({ transition }) => transition.name)])),
   } : undefined;
   const refusal = run.refusalHarness ? { harness: run.refusalHarness, guards: new Set(refusals.keys()) } : undefined;
   return {
