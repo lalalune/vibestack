@@ -65,10 +65,11 @@ export interface Found {
 }
 
 /** The package a directory belongs to: the nearest `package.json` above it. */
-export function packageOf(dir: string): { name: string; dir: string } {
+export function packageOf(dir: string, observe?: (file: string) => void): { name: string; dir: string } {
   const file = join(dir, "package.json");
+  observe?.(file);
   if (existsSync(file)) return { name: JSON.parse(readFileSync(file, "utf8")).name ?? basename(dir), dir };
-  return dirname(dir) === dir ? { name: basename(dir), dir } : packageOf(dirname(dir));
+  return dirname(dir) === dir ? { name: basename(dir), dir } : packageOf(dirname(dir), observe);
 }
 
 /** `spec/billing/index.md` is `billing`, `spec/billing/payments.md` is `billing__payments` (SPEC.md, "Writing a spec"). */
@@ -130,6 +131,12 @@ export function programs(root: string, configs: Map<string, string | undefined>)
   };
   const given = ts.getParsedCommandLineOfConfigFile(join(root, "tsconfig.json"), {}, {
     ...ts.sys, onUnRecoverableConfigFileDiagnostic: fail,
+    readDirectory: () => [],
+    fileExists(file) {
+      const exists = ts.sys.fileExists(file);
+      if (!exists) configs.set(file, undefined);
+      return exists;
+    },
     readFile(file) {
       const content = ts.sys.readFile(file);
       configs.set(file, content);
@@ -148,27 +155,44 @@ export function programs(root: string, configs: Map<string, string | undefined>)
   };
   const imports = new Map<string, Imports>();
   const installed = (file: string) => /(^|[\\/])node_modules([\\/]|$)/.test(file);
+  const links = new Map<string, string | undefined>();
   const rel = (file: string) => relative(root, file).replaceAll("\\", "/");
   let moduleCache: ts.ModuleResolutionCache;
   host.resolveModuleNameLiterals = (literals, from, redirected, options, source) => {
     const dependencies = new Set<string>();
     const probes = new Map<string, Lookup>();
     const record = (op: Lookup) => probes.set(op[0] + "\0" + op[1], op);
+    const owned = (file: string): string | undefined => {
+      if (!installed(file)) return file;
+      const pkg = /^(.*[\\/]node_modules[\\/](?:@[^\\/]+[\\/])?[^\\/]+)(?=[\\/]|$)/.exec(file)?.[1];
+      if (!pkg) return;
+      if (!links.has(pkg)) {
+        const resolved = ts.sys.realpath!(pkg);
+        links.set(pkg, installed(resolved) ? undefined : resolved);
+      }
+      const target = links.get(pkg);
+      if (!target) return;
+      record(["realpath", rel(pkg), rel(target)]);
+      return target + file.slice(pkg.length);
+    };
     const observing: ts.ModuleResolutionHost = {
       ...host,
       fileExists(file) {
         const exists = host.fileExists(file);
-        if (!exists && !installed(file)) record(["file", rel(file)]);
+        const input = !exists && owned(file);
+        if (input) record(["file", rel(input)]);
         return exists;
       },
       directoryExists(dir) {
         const exists = ts.sys.directoryExists(dir);
-        if (!exists && !installed(dir)) record(["directory", rel(dir)]);
+        const input = !exists && owned(dir);
+        if (input) record(["directory", rel(input)]);
         return exists;
       },
       readFile(file) {
         const text = host.readFile(file);
-        if (text !== undefined && !installed(file)) record(["manifest", rel(file), createHash("sha1").update(text).digest("hex")]);
+        const input = text !== undefined && owned(file);
+        if (input && text !== undefined) record(["manifest", rel(input), createHash("sha1").update(text).digest("hex")]);
         return text;
       },
       realpath(file) {
@@ -177,12 +201,16 @@ export function programs(root: string, configs: Map<string, string | undefined>)
         return resolved;
       },
     };
-    const internal = installed(from);
+    const internal = !owned(from);
     const modules = literals.map((literal) => {
       const mode = ts.getModeForUsageLocation(source, literal, options);
       const result = ts.resolveModuleName(literal.text, from, options, internal ? host : observing, internal ? moduleCache : undefined, redirected, mode);
       const file = result.resolvedModule?.resolvedFileName;
-      if (file && !installed(file)) dependencies.add(file);
+      const input = !internal && file && owned(file);
+      if (file && input) {
+        dependencies.add(file);
+        dependencies.add(input);
+      }
       return result;
     });
     if (!internal) imports.set(from, { files: [...dependencies], lookups: [...probes.values()] });
@@ -190,6 +218,7 @@ export function programs(root: string, configs: Map<string, string | undefined>)
   };
   let last: ts.Program | undefined;
   return (files: string[], reset: boolean) => {
+    links.clear();
     moduleCache = ts.createModuleResolutionCache(host.getCurrentDirectory(), host.getCanonicalFileName, options);
     if (reset) imports.clear();
     const metas = [...new Set(files.map(dirname))].flatMap((dir) => readdirSync(dir).filter((name) => /\.meta\.tsx?$/.test(name)).map((name) => join(dir, name)));

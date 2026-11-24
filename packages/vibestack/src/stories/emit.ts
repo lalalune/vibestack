@@ -11,7 +11,7 @@ import { type Plan, type Story, plan } from "./variants.ts";
 export type { Prop, Story };
 
 /** Part of every hash: raise it when the same inputs would be written differently. */
-const VERSION = 11;
+const VERSION = 12;
 
 export interface Component {
   id: string;
@@ -267,7 +267,7 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
   const rel = (file: string) => relative(root, file).replaceAll("\\", "/");
   const from = (file: string) => JSON.stringify(relative(out, file).replaceAll("\\", "/").replace(/^(?!\.)/, "./"));
   // A file the Program read is hashed as the Program read it, so an edit made while it ran is seen by the next run.
-  const text = (file: string) => built?.program.getSourceFile(file)?.text ?? (built && configured.has(file) ? configured.get(file) : ts.sys.readFile(file));
+  const text = (file: string) => built?.program.getSourceFile(file)?.text ?? (built && configured.has(file) ? configured.get(file) : existsSync(file) ? ts.sys.readFile(file) : undefined);
   const hash = (component: string, inputs: string[], observe?: (file: string) => void, read = text) => {
     const sum = createHash("sha1").update(`${VERSION}:${cap}:${rel(out)}`);
     for (const file of inputs) {
@@ -289,7 +289,8 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
    * source file those reach through imports, by an alias or in another workspace package too, short of `node_modules`.
    */
   const inputsOf = (file: string, names: string[]) => {
-    const seen = new Set([file, ...beside(file, names), join(packageOf(dirname(file)).dir, "package.json"), ...configured.keys()]);
+    const seen = new Set([file, ...beside(file, names), ...configured.keys()]);
+    packageOf(dirname(file), (manifest) => seen.add(manifest));
     const lookups = new Map<string, Lookup>();
     for (const each of seen) {
       const imported = built!.imports.get(each);
@@ -325,10 +326,10 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
     };
     const states = new Map<string, string | boolean | undefined>();
     const valid = ([kind, file, before]: Lookup) => {
-      const absolute = join(root, file);
-      observe?.(absolute);
       const key = kind + "\0" + file;
       if (!states.has(key)) {
+        const absolute = join(root, file);
+        observe?.(absolute);
         switch (kind) {
           case "file": states.set(key, ts.sys.fileExists(absolute)); break;
           case "directory": states.set(key, ts.sys.directoryExists(absolute)); break;
