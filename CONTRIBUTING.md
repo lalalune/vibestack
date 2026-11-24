@@ -1,17 +1,19 @@
 # Contributing
 
 Every contributor, person or agent, reads [AGENTS.md](AGENTS.md) in full before any work, and the skill or file its ["Where the rest is"](AGENTS.md#where-the-rest-is) names for the work at hand.
-Starting a project from the template is [README.md, "Set up a new project"](README.md#set-up-a-new-project).
+Starting a project is [README.md, "Quickstart"](README.md#quickstart).
 Everything is built on [the stack](AGENTS.md#the-stack): Node 26, pnpm, VibeLang on Effect for the shell, React for every interface.
 
 ## The monorepo
 
 | Path | Holds |
 |---|---|
-| `apps/` | deployable applications; `apps/app` is the hello world to replace |
-| `packages/` | what applications share: `@repo/ui` (components), `@repo/design-system` (tokens) |
-| `vibestack/` | the tools: the `spec` command, Studio, and what any project uses but does not own (`vibestack/testing`, `vibestack/design`, `vibestack/stories`) |
-| `vibestack/examples/` | standalone projects, each with its own install; never part of the workspace |
+| `packages/vibestack/` | the `vibestack` npm package (`vibestack` and `spec` CLIs, formal/testing/stories/design/eslint/chromium/config exports, and bundled agent assets) |
+| `packages/studio/` | the standalone `vibestack-studio` npm package (bundled Node server and prebuilt React UI, zero runtime dependencies) |
+| `packages/create-vibestack/` | the `create-vibestack` npm scaffolder (`pnpm create vibestack`), bundling `template/` |
+| `template/` | the clean starter workspace (`template/apps/app`, `template/packages/ui`, `template/packages/design-system`, `template/spec/`) |
+| `examples/` | standalone projects (`examples/order`, `examples/dashboard`, `examples/fullstack`, `examples/assistant`), each consuming `vibestack` as a package; never part of the workspace |
+| `selftest/` | tool self-tests (`selftest/selftest.ts`, `selftest/docs.ts`, `selftest/examples.ts`) and spec fixtures (`selftest/fixtures/`); never shipped downstream |
 
 The specs of every package are in the one tree at the root ([SPEC.md, "One spec tree"](SPEC.md#one-spec-tree));
 [Architecture](#architecture) maps what is generated from what, which test is for what, and the
@@ -42,15 +44,15 @@ tasks wait for its `gen` and the root's, and its `check` for all of them, since 
 can never own a root spec waits for no root `gen`, so a spec edit leaves its tasks cached: Studio, which has a `spec/`
 of its own, and `@repo/design-system` and `@repo/ui`, which have no `spec/<name>/`; `@repo/ui`'s tests still wait for
 its stories, whose `@model` tags read the root's `gen/`. Studio's tests wait for its page build and are keyed by its
-files and the `vibestack/fixtures/` they read, besides the tools every task is keyed by. The root's
+files and the `selftest/fixtures/` they read, besides the tools every task is keyed by. The root's
 `check` rewrites its owners' `gen/` too, so it waits for their tasks: name each owner's in `//#check` of `turbo.json`,
 as `@repo/app`'s are. `pnpm lint:js` on its own needs what `gen` and `typecheck` write (`gen/`, `.vibe/declarations`);
 `pnpm lint` runs them first.
 `pnpm all //#analyze` also runs or restores the application and Studio generators,
 the UI stories and the design theme before analysis reads their outputs.
 
-The hosted VibeStack app build keys its `//#gen` dependency on `apps/app/gen/`.
-Its other inputs come from `apps/app/` and the declared workspace builds. Add any
+The hosted VibeStack app build keys its `//#gen` dependency on `template/apps/app/gen/`.
+Its other inputs come from `template/apps/app/` and the declared workspace builds. Add any
 new reads outside those inputs to the build profile in `.github/workflows/ci.yml`.
 
 Pull requests go to `main`, the only long-lived branch; what CI runs on them is in
@@ -60,46 +62,50 @@ Pull requests go to `main`, the only long-lived branch; what CI runs on them is 
 
 | File | Role |
 |---|---|
-| `vibestack/spec.ts`, `vibestack/pipeline.ts` | the `spec` command, and the pipeline it runs |
-| `vibestack/parse.ts`, `vibestack/review.ts` | literate specs and the review ledger |
-| `vibestack/cache.ts`, `vibestack/run.ts` | stage caches and bounded tool execution |
-| `vibestack/units.ts`, `vibestack/simulate.ts` | generation, proof units, simulation and replay |
-| `vibestack/util.ts` | source discovery, package fingerprints and citations |
-| `vibestack/testing/check.ts` | the `tests` stage and the rules it holds tests to |
-| `vibestack/gen/vibe.ts` | `gen/<name>.effect.vibe`, read off the generated TypeScript |
-| `vibestack/gen/react.ts` | `gen/<name>.react.ts` (`useMachine`), in a package that depends on React |
-| `vibestack/scan.ts` | how a spec's lines are read; imports nothing, so Studio's page uses it too |
-| `vibestack/studio/` | Studio, a workspace package with its own spec, checked by `pnpm --filter vibestack-studio check`: change `spec/`, then its shell in `src/`. Under `pnpm dev`, its `dev` script waits for what its build does, Studio's `gen` and the packages it builds on, then rebuilds the page it serves on each save of the page's sources, and builds afresh when the Vite config, `vibestack/design` or the tokens change: reload the browser, no restart |
-| `vibestack/prove.ts` | proves one unit: checks and splices the proof file, runs LemmaScript and `dafny audit`, verifies again with every assertion isolated each definition that fails, and alone every postcondition a failing one could hide |
-| `vibestack/proof/lib.dfy` | the library proof files call |
-| `vibestack/std/` | specs that ship with the tools, which any spec may import, each with its proof file |
-| `vibestack/conform.ts` | the `traces` stage: drivers, each in a Node of its own, `driver:` programs and recorded traces; saved counterexamples; the driver stub |
-| `vibestack/explore.ts` | the `explore` stage: serves a package's page with its app script, runs Bombadil on it, and replays and removes a saved run |
-| `vibestack/conformance.ts` | the comparing: journeys, malformed-input probes, walks, shrinking and replay; copied into `gen/` for a driver's types |
-| `vibestack/testing/` | what packages import: `project()` (the Vitest configuration), the property-test generator, `effectDriver` |
-| `vibestack/stories/`, `vibestack/design/` | generated stories and their tests; design tokens and their lint rules. The design project module in [`vibestack/design/project.ts`](vibestack/design/project.ts) builds or checks several token directories in one process. |
-| `vibestack/eslint.ts` | `withWorkspaceBarrels`: ESLint rules enforcing barrel-only workspace `exports` and imports, with per-file ratchets |
-| `vibestack/gen.ts` | the translator: reads what a module imports and defines |
-| `vibestack/gen/types.ts` | everything decided by a type |
-| `vibestack/gen/print.ts` | expressions |
-| `vibestack/gen/classify.ts` | which definition is a transition, a guard or a rule |
-| `vibestack/gen/secrecy.ts` | where a secret may go |
-| `vibestack/gen/typescript.ts`, `vibestack/gen/harness.ts` | `gen/<name>.ts`, and the Quint module `gen/<name>.run.qnt` that simulation runs |
-| `vibestack/selftest.ts`, `vibestack/fixtures/` | the tool selftest and the specs it uses besides the order example |
-| `vibestack/selftests/` | the docs and standalone example selftests, and helpers used by the selftests |
+| `packages/vibestack/src/spec.ts`, `packages/vibestack/src/pipeline.ts` | the `vibestack` / `spec` CLI, and the pipeline it runs |
+| `packages/vibestack/src/config.ts` | `vibestack.json` and `package.json#vibestack` configuration (`mode`, `spec.exclude`, `spec.owners`, `cacheDir`, `stages`) |
+| `packages/vibestack/src/doctor.ts`, `packages/vibestack/src/upgrade.ts` | `vibestack doctor [--install-dafny]`, `vibestack init`, `vibestack link`, and `vibestack upgrade` |
+| `packages/vibestack/src/parse.ts`, `packages/vibestack/src/review.ts` | literate specs and the review ledger |
+| `packages/vibestack/src/cache.ts`, `packages/vibestack/src/run.ts` | stage caches and bounded tool execution |
+| `packages/vibestack/src/units.ts`, `packages/vibestack/src/simulate.ts` | generation, proof units, simulation and replay |
+| `packages/vibestack/src/util.ts` | source discovery, package fingerprints and citations |
+| `packages/vibestack/src/testing/check.ts` | the `tests` stage and the rules it holds tests to |
+| `packages/vibestack/src/gen/vibe.ts` | `gen/<name>.effect.vibe`, read off the generated TypeScript |
+| `packages/vibestack/src/gen/react.ts` | `gen/<name>.react.ts` (`useMachine`), in a package that depends on React |
+| `packages/vibestack/src/scan.ts` | how a spec's lines are read; imports nothing, so Studio's page uses it too |
+| `packages/studio/` | Standalone `vibestack-studio` package with its own spec, checked by `pnpm --filter vibestack-studio check`: change `packages/studio/spec/`, then its shell in `packages/studio/src/`. Builds a prebuilt SPA (`dist/page/`) and a single bundled server (`dist/server.mjs`) with zero runtime dependencies; resolves Vite preview dynamically from the target project and delegates `check`/`accept` to the target project's `spec` |
+| `packages/create-vibestack/` | The `create-vibestack` scaffolder (`packages/create-vibestack/src/cli.ts`), bundling `template/` and fetching `examples/` on demand |
+| `packages/vibestack/src/prove.ts` | proves one unit: checks and splices the proof file, runs LemmaScript and `dafny audit`, verifies again with every assertion isolated each definition that fails, and alone every postcondition a failing one could hide |
+| `packages/vibestack/src/proof/lib.dfy` | the library proof files call |
+| `packages/vibestack/src/std/` | specs that ship with the tools, which any spec may import, each with its proof file |
+| `packages/vibestack/src/conform.ts` | the `traces` stage and `spec conformance`: drivers, each in a Node of its own, `driver:` programs and recorded traces; saved counterexamples; the driver stub |
+| `packages/vibestack/src/explore.ts` | the `explore` stage and `spec explore`: serves a package's page with its app script, runs Bombadil on it, and replays and removes a saved run |
+| `packages/vibestack/src/conformance.ts` | the comparing: journeys, malformed-input probes, walks, shrinking and replay; copied into `gen/` for a driver's types |
+| `packages/vibestack/src/testing/` | what packages import via `vibestack/testing*`: `project()` (the Vitest configuration), the property-test generator, `effectDriver` |
+| `packages/vibestack/src/stories/`, `packages/vibestack/src/design/` | generated stories and their tests; design tokens and their lint rules. The design project module in [`packages/vibestack/src/design/project.ts`](packages/vibestack/src/design/project.ts) builds or checks several token directories in one process |
+| `packages/vibestack/src/eslint.ts` | `withWorkspaceBarrels` and `vibestackConfig`: ESLint rules enforcing barrel-only workspace `exports` and imports plus a reusable downstream preset |
+| `packages/vibestack/src/formal.ts` | `vibestack/formal`: `check`, `conformance`, `explore`, `precomputeSimulations`, `prepareSimulationReceipts`, `readSpecs`, `withFormalCache`, `show` |
+| `packages/vibestack/src/gen.ts` | the translator: reads what a module imports and defines |
+| `packages/vibestack/src/gen/types.ts` | everything decided by a type |
+| `packages/vibestack/src/gen/print.ts` | expressions |
+| `packages/vibestack/src/gen/classify.ts` | which definition is a transition, a guard or a rule |
+| `packages/vibestack/src/gen/secrecy.ts` | where a secret may go |
+| `packages/vibestack/src/gen/typescript.ts`, `packages/vibestack/src/gen/harness.ts` | `gen/<name>.ts`, and the Quint module `gen/<name>.run.qnt` that simulation runs |
+| `selftest/selftest.ts`, `selftest/fixtures/` | the tool selftest and the specs it uses besides the order example |
+| `selftest/docs.ts`, `selftest/examples.ts` | the docs and standalone example selftests, and helpers in `selftest/` |
 
-Node runs all of it directly; `pnpm build` compiles it for the packaged `spec` command.
+Node runs all of it directly; `pnpm build` builds `packages/vibestack`, `packages/studio`, and `packages/create-vibestack`.
 
 `check(root)` returns `{ ok, results, next }`, and `spec check --json` prints each result as one line of JSON as soon as
 it is reported, then that object as its last line. Each result has `ok`, `stage` (a stage, or `skipped`), `summary`,
 `detail` and, when it concerns them, `where` and `rules` (each rule as `{ file, key }`); `next` is the line the command
-line ends with. `pnpm selftest` builds scratch projects from this project's spec or from `vibestack/fixtures/`, breaks
+line ends with. `pnpm selftest` builds scratch projects from this project's spec or from `selftest/fixtures/`, breaks
 one thing at a time and asserts which stage catches each. It runs as five cached tasks, each keyed by what its tests
 read: `selftest:docs` the documents against every file they can name, `selftest:examples` each standalone example
 against its own files and the tools. `selftest:tools:a` and `selftest:tools:b` build scratch projects from the order
-example and fixtures. `selftest:tools:rest` also rebuilds the packaged CLI from the workspace, so changes under
-`apps/`, `packages/` and `spec/` invalidate its isolated CI run. The first two each run one shard of the kinds of mistake, the
-`describe` named `in shard a` or `in shard b` in `vibestack/selftest.ts`. The third runs the remaining tool tests there.
+example and fixtures. `selftest:tools:rest` also packs and tests the published packages (`vibestack`, `vibestack-studio`,
+`create-vibestack`), so changes under `template/` or `packages/` invalidate its isolated CI run. The first two each run one shard of the kinds of mistake, the
+`describe` named `in shard a` or `in shard b` in `selftest/selftest.ts`. The third runs the remaining tool tests there.
 Changes to either docs or standalone example test code keep the tool shards cached. Keep the longest tests spread over the three.
 Changes to the root README rerun the docs and packaged tool checks.
 The two suites of the tools, the command line and each kind of mistake, run side by side under one parent, each at most four tests at a time. The order project the
@@ -113,7 +119,7 @@ so three at once ask about three times what one does: on a machine too small for
 `pnpm selftest --concurrency=1` runs one shard at a time. What a change to the
 tools owes it, and the sync skill, is in [AGENTS.md, "Definition of done"](AGENTS.md#definition-of-done).
 
-For phase timings, subscribe to the Node diagnostics channel `vibestack:check:phase` before running `spec check`.
+For phase timings, pass `--timings` to `spec check`, or subscribe to the Node diagnostics channel `vibestack:check:phase` before running `spec check`.
 Each message has `root`, `checkStartedAt` (Unix milliseconds), `phase`, `event` (`start` or `end`) and
 `elapsedMs` (milliseconds measured by a monotonic clock since the check acquired its project lock). Phases
 can overlap. The simulation end records when the last simulation settled. Its message can arrive later,
@@ -124,10 +130,14 @@ errors in subscribers, since Node reports a thrown subscriber error as an uncaug
 
 ## Releasing
 
-Set `version` in the root `package.json`, merge to `main`, and push the tag `v<version>` from it.
-`.github/workflows/release.yml` reuses the `build` task when it runs `pnpm pack`. Then it runs the remaining shard prerequisites
-and `pnpm selftest --only --concurrency=1` with the CI cache keys and attaches the tarball to a GitHub release of that tag.
-A project installs it as [README.md, "Using it from another package"](README.md#using-it-from-another-package) says.
+Set the matching `version` in `packages/vibestack/package.json`, `packages/studio/package.json`, and
+`packages/create-vibestack/package.json`, merge to `main`, and push the tag `v<version>` from it.
+`.github/workflows/release.yml` verifies all three package versions match the tag, runs `pnpm build`,
+runs the remaining shard prerequisites and `pnpm selftest --only --concurrency=1` with the CI cache keys,
+packs tarballs for `vibestack`, `vibestack-studio`, and `create-vibestack`, publishes all three packages
+to npm with `--provenance --access public` (using OIDC trusted publishing via `id-token: write`), and
+attaches the `.tgz` tarballs to the GitHub Release for that tag.
+Projects install or adopt Vibestack as [README.md, "Add to an existing project"](README.md#add-to-an-existing-project) says.
 ## Architecture
 
 The spec owns the rules and state; generated code is its runtime contract.
@@ -149,13 +159,14 @@ See [SPEC.md, "One spec tree"](SPEC.md#one-spec-tree).
 | `spec/**/*.md` | TypeScript core, Quint harness and Dafny under `gen/` | `spec gen`, `spec check`; no |
 | Generated TypeScript | `gen/<name>.effect.vibe`; `gen/<name>.react.ts` (`useMachine`) in a package that depends on React; driver types in `gen/<name>.conformance.ts` over `gen/_conformance.ts` | `spec gen`; no |
 | A shell importing `apply`, with no driver | `test/drivers/<name>.ts`, a stub to fill in | `spec check`; yes, once filled in |
-| `src/**/*.schema.{ts,vibe}`, `src/**/*.contract.{ts,vibe}` | `.cache/generated/tests/` | `vibestack/testing/generate.ts`, before each package test run on `project()`; no |
-| Component props and `*.meta.tsx` | Stories, catalog and interaction/accessibility tests in `generated/stories/` | `vibestack/stories`; no |
-| `packages/design-system/tokens.json` | Theme CSS in `packages/design-system/generated/` | `vibestack/design`; no |
-| `vibestack/` | Packaged `spec` command in `dist/` | `pnpm build`; no, included in the package |
+| `src/**/*.schema.{ts,vibe}`, `src/**/*.contract.{ts,vibe}` | `.cache/generated/tests/` | `packages/vibestack/src/testing/generate.ts`, before each package test run on `project()`; no |
+| Component props and `*.meta.tsx` | Stories, catalog and interaction/accessibility tests in `generated/stories/` | `packages/vibestack/src/stories`; no |
+| `template/packages/design-system/tokens.json` | Theme CSS in `template/packages/design-system/generated/` | `packages/vibestack/src/design`; no |
+| `packages/vibestack/src/` | Packaged `vibestack` / `spec` CLI and typed subpath exports in `dist/` | `pnpm build`; no, included in the package |
+| `packages/studio/` | Standalone `vibestack-studio` server (`dist/server.mjs`) and prebuilt UI (`dist/page/`) | `pnpm build`; no, included in the package |
 | A person's review | `spec/lock.json` | `pnpm accept`; yes |
 | A journey or walk that disagrees with the application | `test/counterexamples/<name>/` | `traces`; yes, replayed before later walks |
-| An exploration that broke a property | Bombadil's run of the page in `test/__traces__/bombadil/` | `explore` (`vibestack/explore.ts`); no, replayed first and removed once it breaks nothing |
+| An exploration that broke a property | Bombadil's run of the page in `test/__traces__/bombadil/` | `explore` (`packages/vibestack/src/explore.ts`); no, replayed first and removed once it breaks nothing |
 
 The adapter and driver types read the generated model; `traces` uses events
 found by the simulator; property tests read schemas and contracts. Generated
@@ -173,8 +184,8 @@ changed files. An invalid edit leaves the existing outputs in use. A check loads
 each generated module from its own `.spec-cache/run-<number>/`, removed when it ends. The first check in a new
 process uses the same path so Node can reuse compiled modules. `.spec-cache/`
 remembers each run of Quint (which parses and typechecks a harness once for all its simulations, each run by Quint's
-evaluator on the result: `vibestack/simulator.ts`), and of LemmaScript and Dafny on a proof, under the program as installed, its arguments and
-the files it reads, without their prose, comments and layout (`vibestack/action.ts`),
+evaluator on the result: `packages/vibestack/src/simulator.ts`), and of LemmaScript and Dafny on a proof, under the program as installed, its arguments and
+the files it reads, without their prose, comments and layout (`packages/vibestack/src/action.ts`),
 and each simulation and proof result under a fingerprint of a spec and its
 imports, the versions of the programs beneath (Quint and Node for a
 simulation; Node, LemmaScript, Dafny and Z3 for a proof, whose key holds the
@@ -207,7 +218,7 @@ assertions once a finished import removes one of its assumptions. A test run
 may run any tool, as Studio's do, so it is keyed by all of them, and with a
 typecheck, a driver's run and an exploration by VibeLang's version and bytes.
 An exploration is keyed by the code that explores and what its page reads
-(`pageInputs` in `vibestack/explore.ts`), which holds every tool when the
+(`pageInputs` in `packages/vibestack/src/explore.ts`), which holds every tool when the
 page runs one, as Studio's does.
 Vitest stores transformed test modules per package. That package's installed
 lockfile controls when its transforms are cleared.
@@ -228,7 +239,7 @@ so each `spec` process, Studio's checks, Turborepo's tasks and the tests and
 drivers they run included, compiles only the code that changed.
 
 An integration checking disposable project directories can import `check`
-and `withFormalCache` from [vibestack/formal](vibestack/formal.ts). Run
+and `withFormalCache` from [`vibestack/formal`](packages/vibestack/src/formal.ts). Run
 `await withFormalCache(cacheDirectory, () => check(projectDirectory))`
 in the same Node process. Use a persistent cache directory writable only
 by trusted runs. It holds
@@ -297,7 +308,7 @@ file a test reads from elsewhere comes through a declared dependency, as the
 root's `@repo/design-system` does. A typecheck is keyed by the scripts and
 JSON alone, and then by the content of every file the compile read. Neither
 covers the simulations' traces in `gen/traces/`, which no test reads and a
-check rewrites, nor the prose `spec init` and the tools keep at a package's
+check rewrites, nor the prose `vibestack init` and the tools keep at a package's
 top (`README.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `SPEC.md`). Turbo's
 `//#test` inputs cover the same files but the root's Markdown, so a restored
 receipt matches unless another root document changed, and then `check` runs the
@@ -343,7 +354,7 @@ build keys unchanged.
 
 ### Seeds and budgets
 
-`vibestack/testing/profile.ts` is the one source of the fixed profiles:
+`packages/vibestack/src/testing/profile.ts` is the one source of the fixed profiles:
 
 | Invocation | Values per property and maximum driver walks | Seed | Seconds exploring each page |
 |---|---:|---:|---:|
@@ -366,15 +377,15 @@ failing exploration found is saved and replayed instead
 ### Which test, for what
 
 [AGENTS.md, "Tests"](AGENTS.md#tests) defines what earns a test and the rules
-`check` enforces. The hello world in `apps/app` demonstrates each kind.
+`check` enforces. The hello world in `template/apps/app` demonstrates each kind.
 
 | Kind | Checks | Source or example |
 |---|---|---|
-| Formal | Rules and laws for every state and input | `spec/app/`; `.proof.dfy` where Dafny needs help, such as `spec/app/echo.proof.dfy` and `src/greeting.proof.dfy` |
+| Formal | Rules and laws for every state and input | `template/spec/app/`; `.proof.dfy` where Dafny needs help, such as `template/spec/app/echo.proof.dfy` and `src/greeting.proof.dfy` |
 | Model-based | Real shell against the spec: journeys, malformed input, walks and saved counterexamples | `test/drivers/app.ts` and the recorded `test/traces/app.jsonl`, run by `traces` |
 | Journey/integration | A story through real services, including what a driver cannot see | `@effect/vitest` in `test/app.test.vibe`: reload from storage |
 | Component/browser | Story interactions and accessibility; browser-only behavior such as focus and storage | Component metadata `play`; `test/app.browser.test.tsx` in Chromium |
-| Exploratory/browser | The served page under random clicks, typing, scrolling and reloads: no uncaught error, console error or failed request, and the properties each rule gives the page, in every state reached | `test/bombadil.ts`, or nothing for Bombadil's defaults; `apps/app/test/bombadil.ts`, run by `explore` |
+| Exploratory/browser | The served page under random clicks, typing, scrolling and reloads: no uncaught error, console error or failed request, and the properties each rule gives the page, in every state reached | `test/bombadil.ts`, or nothing for Bombadil's defaults; `template/apps/app/test/bombadil.ts`, run by `explore` |
 | Property | What a schema or declared contract promises for generated values | Generated from `src/link.contract.ts` and other `*.schema.*` or `*.contract.*` files |
 
 A generated test asserts its schema or contract, never a recorded result of
@@ -400,10 +411,10 @@ how many obligations are proved and how many are simulated only.
 
 ESLint enforces workspace barrel exports (`barrel/exports` on workspace
 `package.json` manifests, including `publishConfig.exports`, and
-`barrel/no-subpath-imports` on code files, via `withWorkspaceBarrels` in
-`vibestack/eslint.ts` with `allowExports` / `allowImports` ratchets for
-adopting repositories) and the stack boundaries, and in `apps/` and
-`packages/` the code rules of AGENTS.md, "Writing code": no comment but a spec
+`barrel/no-subpath-imports` on code files, via `withWorkspaceBarrels` and
+`vibestackConfig` in `packages/vibestack/src/eslint.ts` with `allowExports` / `allowImports` ratchets for
+adopting repositories) and the stack boundaries, and in `template/apps/` and
+`template/packages/` the code rules of AGENTS.md, "Writing code": no comment but a spec
 citation or tool directive, no effect hook, timer or `console`, and no inline
 config but a reasoned `eslint-disable` of another rule. `commented` and
 `scheduled` in `eslint.config.js` give each file that still breaks them the
@@ -421,10 +432,12 @@ configured scopes are in `knip.config.js`, `.madgerc`, `.jscpd.json` and
 |---|---|
 | Pull request or push to `main` | `verify` runs build, types, tests, browser tests, all checks, ESLint, Stylelint, Knip, Madge, jscpd and the docs and examples self-tests with up to four concurrent Turbo tasks on the four-core hosted runner and `--continue=dependencies-successful`. In parallel, `selftest-a`, `selftest-b` and `selftest-rest` run the three tool self-test tasks. |
 | Nightly | Every check fresh under the fixed nightly profile; saved counterexamples become a pull request into the branch the run checked, or the default branch for a tag run. Beside it, the three `selftest:tools` tasks without the selftest's shared tool runs |
-| A `v*` tag (`release.yml`) | Build, `pnpm pack`, the prerequisites and `pnpm selftest --only --concurrency=1` read from the shared cache, and the tarball attached to a GitHub release |
+| A `v*` tag (`release.yml`) | Version check across `packages/vibestack`, `packages/studio`, and `packages/create-vibestack`, `pnpm build`, the prerequisites and `pnpm selftest --only --concurrency=1` read from the shared cache, npm OIDC publish of all three packages, and `.tgz` tarballs attached to a GitHub release |
 
-This repository runs its six root specs in the ordinary check. Consumer
-workflows using the four simulation jobs assign modules by file hash. Each
+This repository runs its root specs in the ordinary check. Consumer
+workflows can reuse `lalalune/vibestack/.github/actions/setup@vX` and invoke
+`pnpm exec spec ci precompute-simulations` across four simulation jobs that
+assign modules by file hash. Each
 shard can fill gaps in its restored spec cache from a previous run of the same
 shard layout and lockfile. When a pull request starts native simulations, it
 can also read that shard’s published receipts from the push to its exact base
@@ -475,7 +488,7 @@ credential, protected by the `turbo-cache-publish` environment's branch
 policy. A pull request keeps its own Turborepo results in the GitHub cache
 instead, which only that pull request reads, so its next push reuses them. Newer commits replace an older run of the same pull request.
 When `TURBO_TOKEN` is unavailable, CI uses Turborepo's local cache. Branch
-pushes also restore and save that cache in GitHub Actions, so a new template
+pushes also restore and save that cache in GitHub Actions, so a new
 repository can reuse completed tasks before configuring a remote cache.
 A job restores only the Turborepo results a job of its name saved.
 Pushes to one branch run one at a time. A run that has started finishes and

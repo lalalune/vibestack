@@ -1,0 +1,53 @@
+{
+  "name": "my-vibestack-app",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "packageManager": "pnpm@10.24.0",
+  "scripts": {
+    "dev": "turbo run dev //#studio",
+    "studio": "spec studio",
+    "check": "spec check",
+    "gen": "spec gen",
+    "accept": "spec accept",
+    "new": "spec new",
+    "upgrade": "vibestack upgrade",
+    "doctor": "vibestack doctor",
+    "postinstall": "vibestack link",
+    "test": "vitest run",
+    "test:browser": "spec tasks test:browser",
+    "typecheck": "vibelang --noEmit -p tsconfig.json",
+    "lint": "spec tasks //#lint:js //#lint:css",
+    "lint:js": "eslint . --max-warnings 0",
+    "lint:css": "stylelint \"**/*.css\" --allow-empty-input",
+    "quick": "spec tasks typecheck test //#lint:js //#lint:css",
+    "verify": "spec tasks build typecheck test test:browser check //#lint:js //#lint:css",
+    "all": "spec tasks"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.1.1",
+    "@eslint-react/eslint-plugin": "catalog:",
+    "@eslint/js": "catalog:",
+    "@repo/design-system": "workspace:*",
+    "@types/node": "catalog:",
+    "@vitest/browser": "catalog:",
+    "@vitest/browser-playwright": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-better-tailwindcss": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "eslint-plugin-react-hooks": "catalog:",
+    "happy-dom": "catalog:",
+    "stylelint": "catalog:",
+    "stylelint-config-standard": "catalog:",
+    "turbo": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vibelang": "0.0.13",
+    "vibelang-vite": "0.0.13",
+    "vibestack": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

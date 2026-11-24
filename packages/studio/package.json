@@ -1,0 +1,66 @@
+{
+  "name": "vibestack-studio",
+  "version": "0.2.0",
+  "private": false,
+  "description": "Standalone Vibestack Studio UI and server for Vibestack specs.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lalalune/vibestack.git",
+    "directory": "packages/studio"
+  },
+  "homepage": "https://github.com/lalalune/vibestack#readme",
+  "bugs": "https://github.com/lalalune/vibestack/issues",
+  "keywords": [
+    "vibestack",
+    "studio",
+    "formal-verification",
+    "quint",
+    "specification",
+    "state-machine"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "bin": {
+    "vibestack-studio": "./dist/server.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node --import vibelang/register test/served.vibe",
+    "check": "node ../vibestack/src/spec.ts check",
+    "gen": "node ../vibestack/src/spec.ts gen",
+    "accept": "node ../vibestack/src/spec.ts accept",
+    "typecheck": "vibelang --noEmit -p .",
+    "test": "vitest run",
+    "build": "node scripts/build.mjs",
+    "dev": "node --watch node_modules/vite/bin/vite.js build --watch --configLoader native"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "4.1.1",
+    "@effect/vitest": "4.1.1",
+    "@repo/design-system": "workspace:*",
+    "@repo/ui": "workspace:*",
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "effect": "4.1.1",
+    "esbuild": "catalog:",
+    "playwright": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tailwindcss": "catalog:",
+    "vibelang": "0.0.13",
+    "vibelang-runtime": "0.0.13",
+    "vibelang-vite": "0.0.13",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

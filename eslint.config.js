@@ -8,9 +8,9 @@ import reactHooks from "eslint-plugin-react-hooks"
 import { defineConfig, globalIgnores } from "eslint/config"
 import tseslint from "typescript-eslint"
 import vibelang from "vibelang/eslint"
-import { designSystem } from "./vibestack/design/eslint.ts"
-import { parseTokens } from "./vibestack/design/tokens.ts"
-import { withWorkspaceBarrels } from "./vibestack/eslint.ts"
+import { designSystem } from "./packages/vibestack/src/design/eslint.ts"
+import { parseTokens } from "./packages/vibestack/src/design/tokens.ts"
+import { withWorkspaceBarrels } from "./packages/vibestack/src/eslint.ts"
 
 const stack = 'AGENTS.md, "The stack"'
 const monorepo = 'CONTRIBUTING.md, "The monorepo"'
@@ -24,10 +24,10 @@ const imports = {
 }
 const noReact = { patterns: [...imports.patterns, { regex: "^react(?:-dom)?(?:/|$)", message: `Tool and domain code does not import React: ${monorepo}.` }] }
 // What no tsconfig.json includes, so the type-aware rules cannot see it.
-const untyped = ["*.{js,ts}", "**/.storybook/**", "packages/design-system/**", "vibestack/design/test/**", "vibestack/stories/test/**"]
-// Every React interface: Studio's page is built on the same theme (vibestack/studio/vite.config.ts).
-const tsx = ["packages/ui/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}", "vibestack/studio/src/page/**/*.{ts,tsx}"]
-const design = "packages/design-system"
+const untyped = ["*.{js,ts}", "template/*.{js,ts}", "packages/*/scripts/**", "packages/vibestack/bin/**", "packages/vibestack/vitest.config.ts", "packages/create-vibestack/vitest.config.ts", "**/.storybook/**", "template/packages/design-system/**", "packages/vibestack/src/design/test/**", "packages/vibestack/src/stories/test/**"]
+// Every React interface: Studio's page is built on the same theme (packages/studio/vite.config.ts).
+const tsx = ["apps/**/*.{ts,tsx}", "template/packages/ui/**/*.{ts,tsx}", "template/apps/**/*.{ts,tsx}", "packages/studio/src/page/**/*.{ts,tsx}"]
+const design = "template/packages/design-system"
 const writing = 'AGENTS.md, "Writing code"'
 const citation = String.raw`spec\/\S+\.md, "[^"]+"`
 const suppressible = String.raw`(?!code\/|barrel\/|no-console\b)[\w@/-]+`
@@ -76,16 +76,35 @@ const effects = {
   },
 }
 const code = { rules: { comments, effects } }
-const own = ["apps/**", "packages/**"]
-const commented = { "apps/app/src/App.tsx": 5, "apps/app/src/greeter.vibe": 5, "apps/app/src/greeting.ts": 1, "apps/app/src/link.contract.ts": 2, "apps/app/src/link.ts": 3, "apps/app/test/app.browser.test.tsx": 5, "apps/app/test/app.test.vibe": 4, "apps/app/test/bombadil.ts": 4, "apps/app/test/drivers/app.ts": 5, "packages/ui/.storybook/preview.ts": 1, "packages/ui/src/components/Button.meta.tsx": 4, "packages/ui/src/components/Button.tsx": 1, "packages/ui/src/components/Card.meta.tsx": 1, "packages/ui/src/components/Dialog.meta.tsx": 2, "packages/ui/src/components/Progress.tsx": 1, "packages/ui/src/lib/cn.ts": 2, "packages/ui/vite.config.ts": 1, "packages/ui/vitest.config.ts": 1 }
-const scheduled = { "apps/app/src/App.tsx": 2 }
+const own = ["apps/**", "template/apps/**", "template/packages/**"]
+const commented = {
+  "template/apps/app/src/App.tsx": 5,
+  "template/apps/app/src/greeter.vibe": 5,
+  "template/apps/app/src/greeting.ts": 1,
+  "template/apps/app/src/link.contract.ts": 2,
+  "template/apps/app/src/link.ts": 3,
+  "template/apps/app/test/app.browser.test.tsx": 5,
+  "template/apps/app/test/app.test.vibe": 4,
+  "template/apps/app/test/bombadil.ts": 4,
+  "template/apps/app/test/drivers/app.ts": 5,
+  "template/packages/ui/.storybook/preview.ts": 1,
+  "template/packages/ui/src/components/Button.meta.tsx": 4,
+  "template/packages/ui/src/components/Button.tsx": 1,
+  "template/packages/ui/src/components/Card.meta.tsx": 1,
+  "template/packages/ui/src/components/Dialog.meta.tsx": 2,
+  "template/packages/ui/src/components/Progress.tsx": 1,
+  "template/packages/ui/src/lib/cn.ts": 2,
+  "template/packages/ui/vite.config.ts": 1,
+  "template/packages/ui/vitest.config.ts": 1,
+}
+const scheduled = { "template/apps/app/src/App.tsx": 2 }
 
 // The tool reads Quint's JSON and the TypeScript compiler API as `any` at its boundaries; packages and apps stay strict.
 const loose = Object.fromEntries(["no-explicit-any", "no-unsafe-argument", "no-unsafe-assignment", "no-unsafe-call", "no-unsafe-member-access", "no-unsafe-return"].map((rule) => [`@typescript-eslint/${rule}`, "off"]))
 
 export default withWorkspaceBarrels(defineConfig(
   // Generated or disposable, and .claude/worktrees holds other checkouts of this repository.
-  globalIgnores(["**/gen/", "!vibestack/gen/", "**/.vibe/", "**/dist/", "**/.cache/", "**/.spec-cache/", "**/generated/", "**/storybook-static/", "**/test/fixtures/", "vibestack/examples/", "vibestack/fixtures/", ".claude/", ".lemmascript/", ".studio/", ".turbo/", "_apalache-out/"]),
+  globalIgnores(["**/gen/", "!packages/vibestack/src/gen/", "**/.vibe/", "**/dist/", "**/.cache/", "**/.spec-cache/", "**/generated/", "**/storybook-static/", "**/test/fixture/", "**/test/fixtures/", "packages/vibestack/assets/", "packages/create-vibestack/template/", "examples/", "selftest/fixtures/", ".claude/", ".lemmascript/", ".studio/", ".turbo/", "_apalache-out/"]),
   { linterOptions: { reportUnusedDisableDirectives: "error", reportUnusedInlineConfigs: "error" } },
   js.configs.recommended,
   tseslint.configs.recommendedTypeChecked,
@@ -94,19 +113,20 @@ export default withWorkspaceBarrels(defineConfig(
     plugins: { boundaries },
     settings: {
       "boundaries/elements": [
-        { type: "package", pattern: ["packages/*", "apps/*"], capture: ["name"] },
-        { type: "studio", pattern: "vibestack/studio" },
-        { type: "tool", pattern: "vibestack" },
+        { type: "package", pattern: ["apps/*", "template/packages/*", "template/apps/*", "packages/create-vibestack"], capture: ["name"] },
+        { type: "studio", pattern: "packages/studio" },
+        { type: "tool", pattern: "packages/vibestack" },
+        { type: "selftest", pattern: "selftest" },
       ],
     },
     rules: {
       "no-restricted-imports": ["error", imports],
-      // A relative path stays inside its package; the tool and Studio, which ships inside it, import each other.
+      // A relative path stays inside its package; the tool, Studio, and selftest share tool internals.
       "boundaries/dependencies": ["error", {
         default: "disallow",
         policies: [
           { from: { element: { type: "package" } }, allow: { to: { element: { type: "package", captured: { name: "{{ from.element.captured.name }}" } } } } },
-          { from: { element: { types: ["tool", "studio"] } }, allow: { to: { element: { types: ["tool", "studio"] } } } },
+          { from: { element: { types: ["tool", "studio", "selftest"] } }, allow: { to: { element: { types: ["tool", "studio", "selftest"] } } } },
         ],
       }],
       // Nor does it reach a file outside every package and the tool.
@@ -125,9 +145,9 @@ export default withWorkspaceBarrels(defineConfig(
   },
   { files: untyped, extends: [tseslint.configs.disableTypeChecked] },
   // A ratchet at today's longest (Studio's server); a test's describe block holds its cases.
-  { ignores: ["**/test/**", "vibestack/selftest.ts"], rules: { "max-lines-per-function": ["error", { max: 250, skipBlankLines: true, skipComments: true }] } },
+  { ignores: ["**/test/**", "selftest/**"], rules: { "max-lines-per-function": ["error", { max: 250, skipBlankLines: true, skipComments: true }] } },
   {
-    files: ["vibestack/**"],
+    files: ["packages/vibestack/**", "packages/studio/**", "packages/create-vibestack/**", "selftest/**"],
     ignores: ["**/*.tsx"],
     rules: {
       ...loose,
@@ -149,8 +169,8 @@ export default withWorkspaceBarrels(defineConfig(
   { files: ["**/*.{vibe,vibex}"], extends: [tseslint.configs.disableTypeChecked], languageOptions: { parser: vibelang, parserOptions: { projectService: false } }, rules: { "no-undef": "off" } },
   // React belongs to interfaces: the tools apart from Studio's page, and schemas, contracts, drivers and the shell everywhere, do without it.
   {
-    files: ["vibestack/**", "**/*.{schema,contract}.ts", "**/test/drivers/**", "**/*.vibe"],
-    ignores: ["vibestack/studio/src/page/**"],
+    files: ["packages/vibestack/**", "packages/studio/src/**", "packages/create-vibestack/**", "**/*.{schema,contract}.ts", "**/test/drivers/**", "**/*.vibe"],
+    ignores: ["packages/studio/src/page/**"],
     rules: { "no-restricted-imports": ["error", noReact] },
   },
   // eslint-plugin-react-hooks owns the rules both plugins ship; @eslint-react adds the rest.
@@ -159,7 +179,7 @@ export default withWorkspaceBarrels(defineConfig(
     extends: [react.configs["recommended-type-checked"], reactHooks.configs.flat.recommended],
     rules: Object.fromEntries(Object.keys(reactHooks.rules).filter((rule) => `@eslint-react/${rule}` in react.configs["recommended-type-checked"].rules).map((rule) => [`@eslint-react/${rule}`, "off"])),
   },
-  // vibestack/design/eslint.ts: token classes only, read from the theme `pnpm --filter @repo/design-system build` writes.
+  // packages/vibestack/src/design/eslint.ts: token classes only, read from the theme `pnpm --filter @repo/design-system build` writes.
   {
     files: tsx,
     extends: [designSystem({ tailwind, tokens: parseTokens(JSON.parse(readFileSync(`${design}/tokens.json`, "utf8"))), entryPoint: `${import.meta.dirname}/${design}/generated/theme.css` })],
@@ -168,14 +188,14 @@ export default withWorkspaceBarrels(defineConfig(
   // @repo/ui holds the form controls and dialogs every interface uses.
   {
     files: tsx,
-    ignores: ["packages/ui/**"],
+    ignores: ["template/packages/ui/**"],
     rules: {
       "no-restricted-globals": ["error", ...["alert", "confirm", "prompt"].map((name) => ({ name, message: "Use Dialog or Alert from @repo/ui." }))],
       "no-restricted-syntax": ["error", { selector: "JSXOpeningElement[name.name=/^(input|textarea)$/]", message: "Use Input, Textarea or Checkbox from @repo/ui." }],
     },
   },
   { files: own, ignores: ["**/*.{vibe,vibex}"], languageOptions: { parser: guarded(tseslint.parser) } },
-  { files: ["{apps,packages}/**/*.{vibe,vibex}"], languageOptions: { parser: guarded(vibelang) } },
+  { files: ["template/{apps,packages}/**/*.{vibe,vibex}"], languageOptions: { parser: guarded(vibelang) } },
   { files: own, plugins: { code }, rules: { "no-console": "error", "code/comments": ["error", { left: commented }], "code/effects": ["error", { left: scheduled }] } },
-  { files: ["packages/ui/src/components/**"], ignores: ["**/*.meta.tsx"], rules: { "code/comments": ["error", { jsdoc: true, left: commented }] } },
+  { files: ["template/packages/ui/src/components/**"], ignores: ["**/*.meta.tsx"], rules: { "code/comments": ["error", { jsdoc: true, left: commented }] } },
 ), { root: import.meta.dirname })

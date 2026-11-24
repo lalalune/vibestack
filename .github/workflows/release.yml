@@ -1,16 +1,16 @@
 name: release
 
-# A v* tag that names the version in package.json builds the packaged `spec`
-# command, runs the tools' self-test through the shared cache, where CI has
-# already verified the commit, one task at a time where it has not, since one
-# runner is too small for all five at once, and attaches the tarball to a GitHub release
-# (CONTRIBUTING.md, "Releasing").
+# A v* tag matching packages/{vibestack,studio,create-vibestack}/package.json builds all three
+# packages, runs the tools' self-test through the shared cache (or one task at a time where CI
+# has not warmed it), publishes all three packages to npm with OIDC provenance, and attaches
+# their .tgz tarballs to the GitHub release (CONTRIBUTING.md, "Releasing").
 on:
   push:
     tags: ["v*"]
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -24,10 +24,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      - run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
-      - run: pnpm pack --pack-destination "$RUNNER_TEMP"
-      - run: pnpm all //#test vibestack-studio#typecheck vibestack-studio#test vibestack-studio#test:browser --concurrency=1
+        with:
+          install-chromium: both
+      - name: Verify package versions match tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for pkg in packages/vibestack packages/studio packages/create-vibestack; do
+            ver=$(node -p "require('./$pkg/package.json').version")
+            test "$ver" = "$tag" || { echo "::error::$pkg version $ver does not match tag $GITHUB_REF_NAME"; exit 1; }
+          done
+      - run: pnpm build
+      - run: pnpm all vibestack#test vibestack-studio#typecheck vibestack-studio#test vibestack-studio#test:browser --concurrency=1
       - run: pnpm selftest --only --concurrency=1
-      - run: gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/vibestack-${GITHUB_REF_NAME#v}.tgz" --verify-tag --generate-notes
+      - name: Pack release tarballs
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-tarballs"
+          pnpm --filter vibestack pack --pack-destination "$RUNNER_TEMP/release-tarballs"
+          pnpm --filter vibestack-studio pack --pack-destination "$RUNNER_TEMP/release-tarballs"
+          pnpm --filter create-vibestack pack --pack-destination "$RUNNER_TEMP/release-tarballs"
+          ls -lh "$RUNNER_TEMP/release-tarballs"
+      - name: Publish packages to npm
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for tarball in "$RUNNER_TEMP/release-tarballs"/*.tgz; do
+            echo "Publishing $tarball..."
+            npm publish "$tarball" --provenance --access public
+          done
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-tarballs"/*.tgz --verify-tag --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

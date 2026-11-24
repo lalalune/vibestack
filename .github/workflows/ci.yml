@@ -48,7 +48,8 @@ jobs:
           TASK: ${{ matrix.tasks }}
           JOB: ${{ matrix.name }}
         run: |
-          hash=$(node vibestack/spec.ts tasks "$TASK" --only --dry=json --cache=local:w | jq -er --arg task "$TASK" '
+          if [[ -f packages/vibestack/src/spec.ts ]]; then spec=(node packages/vibestack/src/spec.ts); else spec=(pnpm exec spec); fi
+          hash=$("${spec[@]}" tasks "$TASK" --only --dry=json --cache=local:w | jq -er --arg task "$TASK" '
             .tasks | select(length == 1) | .[0]
             | select(.taskId == $task and .resolvedTaskDefinition.cache == true and .resolvedTaskDefinition.outputs == [])
             | .hash
@@ -88,7 +89,7 @@ jobs:
       - name: Materialize UI stories before tests
         if: github.repository == 'lalalune/vibestack' && matrix.name == 'verify'
         continue-on-error: true
-        run: node vibestack/spec.ts tasks '@repo/ui#gen'
+        run: node packages/vibestack/src/spec.ts tasks '@repo/ui#gen'
       - id: simulations
         if: matrix.name == 'verify' && github.repository != 'lalalune/vibestack'
         continue-on-error: true
@@ -137,19 +138,20 @@ jobs:
             options+=(--log-order=stream --concurrency=4)
             config=.cache/verify-turbo.json
             if [[ $GITHUB_REPOSITORY == lalalune/vibestack && -z ${TURBO_ROOT_TURBO_JSON+x} && ! -e turbo.jsonc && ! -L turbo.jsonc &&
-              -d spec/app && -f apps/app/package.json && ! -e apps/app/spec && ! -e apps/app/turbo.json && ! -e apps/app/turbo.jsonc ]] &&
-              jq -e --slurpfile app apps/app/package.json '
+              -d template/spec/app && -f template/apps/app/package.json && ! -e template/apps/app/spec && ! -e template/apps/app/turbo.json && ! -e template/apps/app/turbo.jsonc ]] &&
+              jq -e --slurpfile app template/apps/app/package.json '
                 select($app[0] | .name == "@repo/app" and .scripts.build == "vite build" and (.scripts | has("prebuild") or has("postbuild") | not))
                 | select(.tasks | (has("@repo/app#build") | not) and (.build | type == "object" and (has("inputs") or has("command") | not) and (.dependsOn | index("//#gen") != null)))
-                | select(.tasks["//#gen"].outputs | index("apps/*/gen/**") != null and all(.[]; startswith("!") | not))
-                | .tasks["@repo/app#build"] = (.tasks.build + {inputs: ["$TURBO_DEFAULT$", {mode: "dependencyOutputs", from: ["//#gen"], globs: ["apps/app/gen/**"]}]})
+                | select(.tasks["//#gen"].outputs | index("template/apps/*/gen/**") != null and all(.[]; startswith("!") | not))
+                | .tasks["@repo/app#build"] = (.tasks.build + {inputs: ["$TURBO_DEFAULT$", {mode: "dependencyOutputs", from: ["//#gen"], globs: ["template/apps/app/gen/**"]}]})
               ' turbo.json > "$config"; then
               options+=(--root-turbo-json "$config")
             fi
           elif [[ $JOB == selftest-* ]]; then
             options+=(--only)
           fi
-          node vibestack/spec.ts tasks "${tasks[@]}" --continue=dependencies-successful --summarize "${options[@]}"
+          if [[ -f packages/vibestack/src/spec.ts ]]; then spec=(node packages/vibestack/src/spec.ts); else spec=(pnpm exec spec); fi
+          "${spec[@]}" tasks "${tasks[@]}" --continue=dependencies-successful --summarize "${options[@]}"
       - id: publish-tool-selftest
         if: >-
           github.event_name == 'push' && steps.tool-selftest-cache.outputs.key != '' &&
@@ -304,7 +306,8 @@ jobs:
           name: proof-${{ matrix.name }}
           path: |
             gen/proof/
-            vibestack/studio/gen/proof/
+            packages/studio/gen/proof/
+            template/gen/proof/
           if-no-files-found: ignore
       - if: failure()
         uses: actions/upload-artifact@v7
@@ -319,10 +322,14 @@ jobs:
             packages/*/test/__traces__/
             apps/*/.cache/vitest/attachments/
             packages/*/.cache/vitest/attachments/
-            vibestack/studio/test/counterexamples/
-            vibestack/studio/test/__traces__/
-            vibestack/examples/*/test/counterexamples/
-            vibestack/examples/*/test/__traces__/
+            template/apps/*/test/counterexamples/
+            template/apps/*/test/__traces__/
+            template/packages/*/test/counterexamples/
+            template/packages/*/test/__traces__/
+            template/apps/*/.cache/vitest/attachments/
+            template/packages/*/.cache/vitest/attachments/
+            examples/*/test/counterexamples/
+            examples/*/test/__traces__/
           if-no-files-found: ignore
           include-hidden-files: true
 
@@ -489,55 +496,12 @@ jobs:
             trap 'kill "$receiver" 2>/dev/null || true; wait "$receiver" 2>/dev/null || true' EXIT
           fi
           unset GH_TOKEN
-          node --input-type=module <<'JS'
-          import { createHash } from "node:crypto";
-          import fs from "node:fs";
-          import path from "node:path";
-          import { prepareSimulationReceipts, readSpecs } from "./vibestack/formal.ts";
-          const aggregate = (name) => /^simulate-[a-f0-9]{24}\.json\.(?:zst|gz)$/.test(name);
-          const simulations = () => fs.globSync("simulate-*.json.*", { cwd: ".spec-cache" })
-            .filter((name) => aggregate(name) && fs.lstatSync(path.join(".spec-cache", name)).isFile());
-          const digest = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-          const restored = new Map();
-          for (const name of simulations()) {
-            try { restored.set(name, digest(path.join(".spec-cache", name))); } catch { }
-          }
-          const specs = readSpecs(process.cwd());
-          const inShard = ({ file }) => parseInt(createHash("sha256").update(file).digest("hex").slice(0, 8), 16) % Number(process.env.SHARDS) === Number(process.env.SHARD) - 1;
-          const names = specs.filter(inShard).map(({ name }) => name);
-          const { results, seedDirectory, partialDirectory } = await prepareSimulationReceipts(process.cwd(), specs, names, process.env.RUNNER_TEMP);
-          const checkpoint = seedDirectory ?? partialDirectory;
-          let transfer = checkpoint ?? fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, "simulation-delta-"));
-          if (!checkpoint) {
-            for (const name of simulations()) if (!restored.has(name)) {
-              fs.copyFileSync(path.join(".spec-cache", name), path.join(transfer, name));
-            }
-          } else {
-            const contents = fs.readdirSync(checkpoint).sort().map((name) => [name, digest(path.join(checkpoint, name))]);
-            if (contents.some(([name, hash]) => aggregate(name) && restored.get(name) !== hash)) {
-              const fingerprint = createHash("sha256").update(JSON.stringify(contents)).digest("hex");
-              const prefix = `${process.env.CACHE_PREFIX}${fingerprint}-`;
-              if (!process.env.RESTORED_KEY.startsWith(prefix)) {
-                const key = `${prefix}${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
-                const directory = path.join(process.env.RUNNER_TEMP, "cached-simulation-receipts");
-                try {
-                  fs.rmSync(directory, { recursive: true, force: true });
-                  fs.renameSync(checkpoint, directory);
-                  transfer = directory;
-                  fs.appendFileSync(process.env.GITHUB_OUTPUT, `cache-key=${key}\ncache-prefix=${prefix}\n`);
-                } catch (error) {
-                  console.log(`::warning::Could not stage the simulation cache: ${error.message}`);
-                }
-              }
-            }
-          }
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `directory=${transfer}\n`);
-          const failed = results.filter(({ ok }) => !ok);
-          for (const { stage, summary, detail, where } of failed) console.log(`✗ ${stage} ${where ?? ""}: ${summary}\n${detail}`);
-          const kind = seedDirectory ? "complete seed" : partialDirectory ? "partial seed" : "new aggregate";
-          console.log(`shard ${process.env.SHARD} of ${process.env.SHARDS}: ${names.length} specs, ${results.length} results, ${fs.readdirSync(transfer).length} ${kind} entries, ${failed.length} failed`);
-          process.exitCode = failed.length ? 1 : 0;
-          JS
+          if [[ -f packages/vibestack/src/spec.ts ]]; then
+            spec=(node packages/vibestack/src/spec.ts)
+          else
+            spec=(pnpm exec spec)
+          fi
+          "${spec[@]}" ci precompute-simulations --shard "$SHARD" --shards "$SHARDS" --out "$RUNNER_TEMP" --github-output "$GITHUB_OUTPUT"
       - id: published-simulation-cache
         if: ${{ !cancelled() && steps.precompute.outputs.cache-key != '' && steps.precompute.outputs.base-receipts == 'true' }}
         continue-on-error: true

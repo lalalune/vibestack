@@ -1,3 +1,0 @@
-import { project } from "../testing/vitest.ts";
-
-export default project({ root: import.meta.dirname });

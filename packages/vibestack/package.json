@@ -1,0 +1,203 @@
+{
+  "name": "vibestack",
+  "version": "0.2.0",
+  "description": "Stories, rules and Quint in a Markdown spec tree; verified TypeScript out.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lalalune/vibestack.git",
+    "directory": "packages/vibestack"
+  },
+  "homepage": "https://github.com/lalalune/vibestack#readme",
+  "bugs": "https://github.com/lalalune/vibestack/issues",
+  "keywords": [
+    "formal-verification",
+    "quint",
+    "dafny",
+    "typescript",
+    "specification",
+    "state-machine",
+    "ai-agents"
+  ],
+  "bin": {
+    "vibestack": "./bin/spec.js",
+    "spec": "./bin/spec.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepack": "node scripts/build.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@antithesishq/bombadil": "0.7.10",
+    "@informalsystems/quint": "^0.33.1",
+    "lemmascript": "0.6.9",
+    "playwright": "1.65.0",
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "@effect/vitest": "4.1.1",
+    "@vitest/browser-playwright": "5.1.0",
+    "effect": "4.1.1",
+    "vibelang": "0.0.13",
+    "vibelang-vite": "0.0.13",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@effect/vitest": {
+      "optional": true
+    },
+    "@vitest/browser-playwright": {
+      "optional": true
+    },
+    "effect": {
+      "optional": true
+    },
+    "vibelang": {
+      "optional": true
+    },
+    "vibelang-vite": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@effect/platform-node": "4.1.1",
+    "@effect/vitest": "4.1.1",
+    "@types/node": "^26.6.6",
+    "@vitest/browser-playwright": "5.1.0",
+    "effect": "4.1.1",
+    "vibelang": "0.0.13",
+    "vibelang-runtime": "0.0.13",
+    "vibelang-vite": "0.0.13",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  },
+  "exports": {
+    "./formal": {
+      "types": "./dist/formal.d.ts",
+      "default": "./dist/formal.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./testing/vitest": {
+      "types": "./dist/testing/vitest.d.ts",
+      "default": "./dist/testing/vitest.js"
+    },
+    "./testing/generate": {
+      "types": "./dist/testing/generate.d.ts",
+      "default": "./dist/testing/generate.js"
+    },
+    "./stories": {
+      "types": "./dist/stories/meta.d.ts",
+      "default": "./dist/stories/meta.js"
+    },
+    "./stories/storybook": {
+      "types": "./dist/stories/storybook.d.ts",
+      "default": "./dist/stories/storybook.js"
+    },
+    "./design/eslint": {
+      "types": "./dist/design/eslint.d.ts",
+      "default": "./dist/design/eslint.js"
+    },
+    "./design/tokens": {
+      "types": "./dist/design/tokens.d.ts",
+      "default": "./dist/design/tokens.js"
+    },
+    "./design/project": {
+      "types": "./dist/design/project.d.ts",
+      "default": "./dist/design/project.js"
+    },
+    "./eslint": {
+      "types": "./dist/eslint.d.ts",
+      "default": "./dist/eslint.js"
+    },
+    "./chromium": {
+      "types": "./dist/chromium.d.ts",
+      "default": "./dist/chromium.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "bin": {
+      "vibestack": "./dist/spec.js",
+      "spec": "./dist/spec.js"
+    },
+    "exports": {
+      "./formal": {
+        "types": "./dist/formal.d.ts",
+        "default": "./dist/formal.js"
+      },
+      "./testing": {
+        "types": "./dist/testing/index.d.ts",
+        "default": "./dist/testing/index.js"
+      },
+      "./testing/vitest": {
+        "types": "./dist/testing/vitest.d.ts",
+        "default": "./dist/testing/vitest.js"
+      },
+      "./testing/generate": {
+        "types": "./dist/testing/generate.d.ts",
+        "default": "./dist/testing/generate.js"
+      },
+      "./stories": {
+        "types": "./dist/stories/meta.d.ts",
+        "default": "./dist/stories/meta.js"
+      },
+      "./stories/storybook": {
+        "types": "./dist/stories/storybook.d.ts",
+        "default": "./dist/stories/storybook.js"
+      },
+      "./design/eslint": {
+        "types": "./dist/design/eslint.d.ts",
+        "default": "./dist/design/eslint.js"
+      },
+      "./design/tokens": {
+        "types": "./dist/design/tokens.d.ts",
+        "default": "./dist/design/tokens.js"
+      },
+      "./design/project": {
+        "types": "./dist/design/project.d.ts",
+        "default": "./dist/design/project.js"
+      },
+      "./eslint": {
+        "types": "./dist/eslint.d.ts",
+        "default": "./dist/eslint.js"
+      },
+      "./chromium": {
+        "types": "./dist/chromium.d.ts",
+        "default": "./dist/chromium.js"
+      },
+      "./config": {
+        "types": "./dist/config.d.ts",
+        "default": "./dist/config.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

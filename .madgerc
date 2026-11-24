@@ -1,6 +1,6 @@
 {
   "fileExtensions": ["ts", "tsx"],
-  "tsConfig": { "compilerOptions": { "module": "nodenext", "allowImportingTsExtensions": true, "jsx": "react-jsx", "paths": { "@repo/ui": ["./packages/ui/src/index.ts"] } } },
-  "excludeRegExp": ["(^|/)(node_modules|dist|storybook-static|\\.vibe|\\.cache)/", "^(vibestack/)?(examples|fixtures)/", "/test/fixtures?/"],
+  "tsConfig": { "compilerOptions": { "module": "nodenext", "allowImportingTsExtensions": true, "jsx": "react-jsx", "paths": { "@repo/ui": ["./template/packages/ui/src/index.ts"] } } },
+  "excludeRegExp": ["(^|/)(node_modules|dist|storybook-static|\\.vibe|\\.cache)/", "^(examples|selftest/fixtures|packages/vibestack/assets|packages/create-vibestack/template)/", "/test/fixtures?/"],
   "detectiveOptions": { "ts": { "skipTypeImports": true }, "tsx": { "skipTypeImports": true } }
 }

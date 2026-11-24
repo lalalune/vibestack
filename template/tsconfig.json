@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "erasableSyntaxOnly": true,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src",
+    "test",
+    "gen/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "apps",
+    "packages"
+  ],
+  "vibe": {
+    "sidecarDir": ".vibe/declarations"
+  }
+}

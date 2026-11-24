@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "nodenext",
+    "strict": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true,
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "es2023",
+      "dom",
+      "dom.iterable"
+    ]
+  },
+  "include": [
+    "src/spec.ts",
+    "src/formal.ts",
+    "src/simulator.ts",
+    "src/skill-links.ts",
+    "src/testing/index.ts",
+    "src/testing/vitest.ts",
+    "src/testing/generate.ts",
+    "src/stories/meta.ts",
+    "src/stories/storybook.ts",
+    "src/stories/cli.ts",
+    "src/design/eslint.ts",
+    "src/design/tokens.ts",
+    "src/design/project.ts",
+    "src/design/cli.ts",
+    "src/eslint.ts",
+    "src/chromium.ts",
+    "src/config.ts",
+    "src/doctor.ts",
+    "src/upgrade.ts"
+  ]
+}

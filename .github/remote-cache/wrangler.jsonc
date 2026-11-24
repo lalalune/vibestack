@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
   "name": "vibestack-turbo-cache",
   "account_id": "50ad2052bbc6ca528d6993a689b419a4",
-  "main": "../../vibestack/remote-cache.ts",
+  "main": "../../packages/vibestack/src/remote-cache.ts",
   "compatibility_date": "2026-11-13",
   "workers_dev": true,
   "observability": { "enabled": false },

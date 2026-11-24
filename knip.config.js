@@ -1,48 +1,114 @@
 // Knip reads .vibe files through VibeLang's own compiler, which gives it a module's imports and exports without bodies.
 // Each exception below names something Knip cannot follow:
-//   ignore vibestack/examples/**            standalone projects with their own install, outside the workspace
+//   ignore examples/**                      standalone projects with their own install, outside the workspace
 //   ignore **/test/fixtures/**              inputs the tools' tests read as text, never imported
 //   ignoreIssues server.vibe exports        AGENTS is used in its own file, in a body ignoreExportsUsedInFile cannot see
-//   root @informalsystems/quint, lemmascript  run as executables by vibestack/units.ts and vibestack/prove.ts
+//   @informalsystems/quint, lemmascript     run as executables by units.ts and prove.ts
 //   root @vitest/browser                    loaded by Vitest's browser mode, beside @vitest/browser-playwright
-//   root @repo/design-system                read as files by vibestack/design/test/design.test.ts
+//   root @repo/design-system                read as files by design.test.ts
 //   tailwindcss (ui, design-system, studio, apps)  resolved by @tailwindcss/vite and the lint plugin from CSS
-//   entry *.schema, *.contract              imported by the tests vibestack/testing/generate.ts writes under .cache/
-//   design-system eslint, eslint-plugin-better-tailwindcss, typescript-eslint  loaded by name in vibestack/design/test/design.test.ts
+//   entry *.schema, *.contract              imported by the tests generate.ts writes under .cache/
+//   design-system eslint, eslint-plugin-better-tailwindcss, typescript-eslint  loaded by name in design.test.ts
 import vibelang from "vibelang/knip"
 
 export default {
   compilers: { vibe: vibelang, vibex: vibelang },
   "ignore": [
-    "vibestack/examples/**",
+    "examples/**",
+    "packages/vibestack/assets/**",
+    "packages/create-vibestack/template/**",
+    "template/*.{js,ts}",
     "**/test/fixtures/**"
   ],
   "ignoreExportsUsedInFile": true,
   "ignoreIssues": {
-    "vibestack/studio/src/server.vibe": ["exports"]
+    "packages/studio/src/server.vibe": ["exports"]
   },
   "workspaces": {
     ".": {
       "entry": [
-        "vibestack/design/cli.ts",
-        "vibestack/stories/cli.ts",
-        "vibestack/remote-cache.ts",
-        "vibestack/chromium.ts",
-        "vibestack/*/test/*.test.ts",
-        "vibestack/testing/test/fixture/*/src/*.{schema,contract}.{ts,vibe}"
+        "selftest/selftest.ts",
+        "selftest/selftests/*.ts"
       ],
       "project": [
-        "vibestack/**/*.{ts,tsx,vibe,vibex}",
-        "!vibestack/studio/**"
+        "selftest/**/*.ts"
       ],
       "ignoreDependencies": [
+        "@antithesishq/bombadil",
+        "@effect/platform-node",
+        "@effect/vitest",
         "@informalsystems/quint",
-        "lemmascript",
         "@vitest/browser",
-        "@repo/design-system"
+        "@vitest/browser-playwright",
+        "happy-dom",
+        "jsdom",
+        "lemmascript",
+        "playwright",
+        "vibelang-runtime",
+        "vibelang-vite",
+        "vite"
       ]
     },
-    "packages/ui": {
+    "packages/vibestack": {
+      "entry": [
+        "scripts/build.mjs",
+        "src/spec.ts",
+        "src/skill-links.ts",
+        "src/design/cli.ts",
+        "src/stories/cli.ts",
+        "src/remote-cache.ts",
+        "src/chromium.ts",
+        "src/formal.ts",
+        "src/eslint.ts",
+        "src/config.ts",
+        "src/testing/{index,vitest,generate}.ts",
+        "src/stories/{meta,storybook}.ts",
+        "src/design/{eslint,tokens,project}.ts",
+        "src/*/test/*.test.ts",
+        "src/testing/test/fixture/*/src/*.{schema,contract}.{ts,vibe}"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx,vibe,vibex}",
+        "scripts/*.mjs"
+      ],
+      "ignoreDependencies": [
+        "@antithesishq/bombadil",
+        "@informalsystems/quint",
+        "lemmascript",
+        "playwright"
+      ]
+    },
+    "packages/studio": {
+      "entry": [
+        "scripts/build.mjs",
+        "src/main.vibe",
+        "src/project.ts",
+        "src/doc.ts",
+        "pack-page.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx,vibe,vibex,css}",
+        "test/**/*.{ts,tsx,vibe,vibex}",
+        "scripts/*.mjs",
+        "pack-page.ts"
+      ],
+      "ignoreDependencies": [
+        "tailwindcss"
+      ]
+    },
+    "packages/create-vibestack": {
+      "entry": [
+        "scripts/build.mjs",
+        "src/cli.ts",
+        "test/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts",
+        "scripts/*.mjs"
+      ]
+    },
+    "template/packages/ui": {
       "entry": [
         "src/**/*.{meta,stories}.tsx"
       ],
@@ -50,32 +116,28 @@ export default {
         "**/*.{ts,tsx,vibe,vibex,css}"
       ],
       "ignoreDependencies": [
-        "tailwindcss"
+        "tailwindcss",
+        "vibestack"
       ]
     },
-    "packages/design-system": {
+    "template/packages/design-system": {
       "ignoreDependencies": [
         "eslint",
         "eslint-plugin-better-tailwindcss",
         "tailwindcss",
-        "typescript-eslint"
+        "typescript-eslint",
+        "vibestack"
       ]
     },
-    "vibestack/studio": {
-      "entry": [
-        "src/main.vibe",
-        "src/project.ts",
-        "src/doc.ts"
-      ],
+    "apps/*": {
       "project": [
-        "src/**/*.{ts,tsx,vibe,vibex,css}",
-        "test/**/*.{ts,tsx,vibe,vibex}"
+        "src/**/*.{ts,tsx,vibe,vibex,css}"
       ],
       "ignoreDependencies": [
         "tailwindcss"
       ]
     },
-    "apps/*": {
+    "template/apps/*": {
       "entry": [
         "test/**/*.test.{ts,tsx,vibe}",
         "test/drivers/*.ts",
@@ -86,7 +148,8 @@ export default {
         "test/**/*.{ts,tsx,vibe,vibex}"
       ],
       "ignoreDependencies": [
-        "tailwindcss"
+        "tailwindcss",
+        "vibestack"
       ]
     }
   }

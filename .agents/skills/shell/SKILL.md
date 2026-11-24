@@ -146,6 +146,6 @@ must hold in every state the page reaches goes in `test/bombadil.ts`
 | `devDependencies` | `vibelang`, `vibelang-vite`, `vite`, `vitest`, `@effect/vitest`, `@types/node` |
 
 VibeLang's packages move together, and with one version of Effect: pin them
-exactly, at the versions in the tools' own `package.json`, which `spec init`
-adds. The compiler writes declarations for other tools under `.vibe/`, even
+exactly, at the versions `vibestack init` adds and `vibestack upgrade` keeps
+aligned. The compiler writes declarations for other tools under `.vibe/`, even
 when it only checks: keep it out of Git, like `dist/`.

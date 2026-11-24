@@ -1,0 +1,46 @@
+{
+  "name": "create-vibestack",
+  "version": "0.2.0",
+  "private": false,
+  "description": "Create a new Vibestack project from the starter template or an example.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lalalune/vibestack.git",
+    "directory": "packages/create-vibestack"
+  },
+  "homepage": "https://github.com/lalalune/vibestack#readme",
+  "bugs": "https://github.com/lalalune/vibestack/issues",
+  "keywords": [
+    "vibestack",
+    "create",
+    "scaffold",
+    "formal-verification",
+    "quint",
+    "dafny",
+    "typescript"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "bin": {
+    "create-vibestack": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "template",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

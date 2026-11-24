@@ -6,7 +6,7 @@ dist/
 *.tgz
 .lemmascript/
 _apalache-out/
-!/vibestack/gen/
+!/packages/vibestack/src/gen/
 /.claude/
 /CLAUDE.md
 /.codex/skills

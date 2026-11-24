@@ -5,13 +5,14 @@ is [AGENTS.md](AGENTS.md); the agent's loop is the
 [`sync` skill](.agents/skills/sync/SKILL.md); the stages of
 `pnpm check` are [below](#stages-of-pnpm-check).
 
-A path under `vibestack/` names a file of the
-[vibestack repository](https://github.com/lalalune/vibestack), which the
-installed package does not ship. There, "the order example" is
-`vibestack/examples/order/spec/index.md` and "the tracker example" is
-`vibestack/examples/dashboard/spec/tracker.md`. The root `spec/index.md` links to
-`spec/app/index.md`, the hello world in `apps/app` that uses one of each thing
-Vibestack offers (`apps/app/README.md`), to be replaced by your application.
+Paths under `packages/vibestack/`, `examples/`, `template/`, and `selftest/` name
+files of the [vibestack repository](https://github.com/lalalune/vibestack), which
+the installed package does not ship. There, "the order example" is
+`examples/order/spec/index.md` and "the tracker example" is
+`examples/dashboard/spec/tracker.md`. In the starter template (`template/`),
+`template/spec/index.md` links to `template/spec/app/index.md`, the hello world in
+`template/apps/app` (`template/apps/app/README.md`) — scaffolded to `spec/index.md`,
+`spec/app/index.md`, and `apps/app` in a project created by `create-vibestack`.
 
 ## Stages of `pnpm check`
 
@@ -173,9 +174,9 @@ Refused, each with a message saying why: the generated and harness names
 keywords (`Number`, `delete`, …); Quint built-ins (`to`, `next`, `all`,
 `size`, …); a parameter named like a variant; a variant field called `tag`;
 two record types with the same fields; a field `__proto__`; names beginning
-`std_` (`parseSpec` in `vibestack/parse.ts`), or `nth_`, `get_`, `lookup<n>_`
+`std_` (`parseSpec` in `packages/vibestack/src/parse.ts`), or `nth_`, `get_`, `lookup<n>_`
 or another prefix the generated module uses for itself (`GENERATED` in
-`vibestack/gen.ts`);
+`packages/vibestack/src/gen.ts`);
 and near-misses of the conventions above such as `alwayspaid` or `CanPay`.
 A state machine is also refused the names of its Effect adapter: `Rejected`,
 `NotAnEvent`, `NotAState`, `NotASender`, `Machine`, `machine`, `machineOver`,
@@ -191,22 +192,22 @@ Generated code uses the imported spec's full module path.
 - **`import kernel.* from "./kernel"`** takes a library's names as they are.
   A library is a spec with no `initial`: definitions and laws, or a
   *component* such as an account with `canWithdraw` and `withdraw` and no
-  state of its own (`vibestack/fixtures/account.md` in the vibestack repository,
+  state of its own (`selftest/fixtures/account.md` in the vibestack repository,
   used by `bank.md`).
 - **`import lamp as L from "./lamp"`** takes any spec under a name, a state
   machine included. A room can then hold two `L::Lamp`s in its state, start
   them from `L::initial`, move them with `L::toggle`, require
   `L::alwaysFlipsAreCounted` of each, and add rules about the pair that
-  neither lamp could state (`vibestack/fixtures/room.md` in the vibestack
+  neither lamp could state (`selftest/fixtures/room.md` in the vibestack
   repository).
 - **`import net as N from "./net"`** takes a spec that ships with the tools,
   from their `std/` directory, when the importing spec's directory has no
   `net.md` or `net/index.md`. It is simulated and proved with the specs that
   import it, never reviewed.
-  `vibestack/std/net.md` is a network that loses, repeats and reorders:
+  `packages/vibestack/src/std/net.md` is a network that loses, repeats and reorders:
   the numbers of the messages in flight, with `N::send`, `N::take` (to
   deliver or lose one), `N::repeat`, and laws for an `always` rule that only
-  messages sent are in flight. `vibestack/fixtures/ping.md` uses it.
+  messages sent are in flight. `selftest/fixtures/ping.md` uses it.
 
 A spec is imported once, one way or the other, and imports cannot form a
 circle. Navigation links may point back to a parent. In the generated
@@ -251,13 +252,29 @@ It compiles the owner's Quint and the Quint it imports, and writes the same
 `gen/` artifact that whole-tree generation writes for that owner. Root
 `pnpm check` still checks the whole tree and owns acceptance.
 
+Projects with non-formal directories under `spec/` or custom package paths
+configure them in `vibestack.json` (or under `package.json#vibestack`, see
+[README.md, "Configuration"](README.md#configuration)):
+
+- **`spec.exclude`**: subdirectories relative to `spec/` (for example
+  `["models", "product"]`) ignored by formal parsing, generation, simulation,
+  proofs, and review. Markdown links pointing into an excluded directory are
+  treated as informational prose links rather than broken formal references.
+- **`spec.owners`**: maps spec area names to package directories when a
+  package's directory differs from `apps/<name>` or `packages/<name>` (for
+  example `{ "assistant": "packages/plugin-assistant" }`). Merged with
+  `package.json#specOwners`.
+- **`spec.dir`**, **`mode`**, **`cacheDir`**, **`stages`**: override the spec
+  root, toolchain mode (`"vibelang"`, `"typescript"`, or `"specs-only"`),
+  cache directory, or stage runners (`types`, `tests`, `explore`).
+
 ### Opaque functions
 
 `const f: (A, B) => R`, on one line under a rule, declares a function with no
 body: a hash, a check the spec does not model, a model's judgement. What the
 spec knows of it is the laws in the same rule; they are assumed, not proved,
 and review shows them with it. A law about `f` in another rule is proved as
-any law is. `vibestack/fixtures/badge.md` in the vibestack repository is the
+any law is. `selftest/fixtures/badge.md` in the vibestack repository is the
 example.
 
 - **Simulated** as a table chosen for each trace: for each argument the
@@ -288,8 +305,8 @@ check, so they may read secrets freely.
 The one way out is a definition named `declassify…`: what it returns is
 public. Review marks a rule that defines one, whenever it is new or changed,
 `and declassifies a secret through <name>`; confirm that what it lets out may
-be public. `vibestack/fixtures/card.md` in the vibestack repository is the
-example, and `vibestack/examples/assistant` keeps a saved card out of speech
+be public. `selftest/fixtures/card.md` in the vibestack repository is the
+example, and `examples/assistant` keeps a saved card out of speech
 this way. The check reads the spec only: the shell must keep secrets out of
 its own logs.
 
@@ -297,7 +314,7 @@ its own logs.
 
 A spec refines a machine it imports under a name by defining
 `refines<Alias>`, which maps its state onto that machine's
-(`vibestack/fixtures/switch.md` refines `lamp.md` in the vibestack
+(`selftest/fixtures/switch.md` refines `lamp.md` in the vibestack
 repository):
 
 ```quint
@@ -415,7 +432,7 @@ the state marked.
   anywhere: declare fair the events the property waits on, the system's own
   steps and the deliveries the environment promises, and no others.
 - An event lost and sent again forever loops; only `"strong"` fairness of
-  the delivery rules that out (`vibestack/fixtures/ping.md`).
+  the delivery rules that out (`selftest/fixtures/ping.md`).
 - "Allows" is for the values the simulator tries (`<param>Values`).
 - `within_<rule> = n` also asks that the rule be met within `n` events of
   any state, whatever events they are: a run that takes `n` without meeting
@@ -519,8 +536,9 @@ spec, in the package whose code it is, with the events the simulator found.
 package's own: an owner of `spec/app/cart.md` writes
 `test/drivers/app__cart.ts` on `gen/app__cart.conformance.ts`, records
 `test/traces/app__cart.jsonl` or names its script `driver:app__cart`, all in
-`apps/app`. `vibestack/examples/order/test/drivers/index.ts` is a worked
+`apps/app`. `examples/order/test/drivers/index.ts` is a worked
 driver; `effectDriver` from `vibestack/testing` builds one from a `Layer`.
+Run conformance standalone with `pnpm exec spec conformance [<module>] [--nightly]`.
 
 A `Driver` has `reset`, `dispatch` (sends an event through the
 application's own entry point and returns `"accepted"` or `"refused"`),
@@ -571,8 +589,9 @@ under `src/`.
   uncaught exception or unhandled rejection, no console error, no HTTP
   error), and export a property for each rule the page must keep, citing
   it as a test does. The types come from `@antithesishq/bombadil`, which
-  `spec init` adds. Without the file, the defaults are checked.
-  `apps/app/test/bombadil.ts` is a worked one.
+  `vibestack init` adds. Without the file, the defaults are checked.
+  `template/apps/app/test/bombadil.ts` is a worked one. Run exploration
+  standalone with `pnpm exec spec explore [--nightly]`.
 - **A broken property is saved.** The run is kept in
   `test/__traces__/bombadil`, which is not committed;
   `pnpm exec bombadil browser inspect test/__traces__/bombadil` shows each
@@ -622,7 +641,7 @@ under `src/`.
   time.
   The specs are simulated at once.
 - **The spec covers the rules, not the plumbing.** Chat, HTTP and storage stay
-  hand-written around the generated core, as `vibestack/examples/dashboard/src/notify.vibe`
+  hand-written around the generated core, as `examples/dashboard/src/notify.vibe`
   does for sending messages.
 
 ## Checking harder

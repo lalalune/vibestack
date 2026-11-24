@@ -7,15 +7,11 @@
     ]
   },
   "include": [
-    "vibestack",
-    "gen/*.ts"
+    "selftest"
   ],
   "exclude": [
-    "vibestack/examples",
-    "vibestack/studio",
     "node_modules",
-    "vibestack/design/test",
-    "vibestack/stories/test"
+    "selftest/fixtures"
   ],
   "vibe": {
     "sidecarDir": ".vibe/declarations"
