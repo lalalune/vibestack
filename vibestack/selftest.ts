@@ -17,6 +17,7 @@ import { Miniflare } from "miniflare";
 import { violated } from "./action.ts";
 import { cacheCredentials, collectGarbage, isActionEntry, withFormalCache, type installedProgram as lookupTool } from "./cache.ts";
 import { LIB_FILE, isolatedCopies, parseProofFile, readVerdict, splice } from "./prove.ts";
+import { heading } from "./parse.ts";
 import { precomputeSimulations, prepareSimulationReceipts } from "./formal.ts";
 import { exec, run as tool, toolCpuSeconds } from "./run.ts";
 import { pendingSpecs, showPending, writeLedger } from "./review.ts";
@@ -3213,7 +3214,7 @@ function eachCheck() {
     const root = oneRule("packaged", "A packaged value", "pure val answer = 42");
     const staging = scratch(Object.fromEntries(PACKED.map((file) => [file, read(file)])));
     // Studio's page is built from the workspace packages it shares with every interface.
-    for (const directory of ["vibestack", "packages", "apps", "spec"].filter((d) => fs.existsSync(path.join(project, d))))
+    for (const directory of ["vibestack", "packages", "spec"].filter((d) => fs.existsSync(path.join(project, d))))
       copySources(path.join(project, directory), path.join(staging, directory));
     copySources(path.join(project, ".agents/skills"), path.join(staging, ".agents/skills"));
     const lock = path.join(staging, "vibestack/studio/.spec-cache/lock");
@@ -4061,7 +4062,30 @@ export function useShown(counter: ManagedRuntime.ManagedRuntime<Machine, never>,
     // Nothing stored starts from `initial`, and a stored state goes on from where it was; what the rules refuse, or what is no state, leaves the store as it is; a machine steps from what another over the same store stored since, and its guard is judged by it.
     const kept = await exec(process.execPath, ["--import", "vibelang/register", "--input-type=module", "-e", `import assert from "node:assert/strict"; import { Effect } from "effect"; import { counted, twoPages } from "./src/kept.vibe";
 assert.deepEqual(await Promise.all([undefined, "1", "2", "7", "{"].map((before) => Effect.runPromise(counted(before)))), [[1, "1"], [2, "2"], ["Rejected", "2"], ["NotAState", "7"], ["NotAState", "{"]]);
-assert.deepEqual(await Effect.runPromise(twoPages()), [1, 2, "Rejected", "2"]);`], root);
+assert.deepEqual(await Effect.runPromise(twoPages()), [1, 2, "Rejected", "2"]);
+const { machineOver } = await import("./gen/index.effect.vibe");
+const { Deferred, Fiber, Ref } = await import("effect");
+const outcome = await Effect.runPromise(Effect.gen(function*() {
+  const kept = yield* Ref.make(0);
+  const firstSaving = yield* Deferred.make();
+  const resume = yield* Deferred.make();
+  const machine = yield* machineOver(() => Ref.get(kept), (n) => Effect.gen(function*() {
+    if (n === 1) {
+      yield* Deferred.succeed(firstSaving, undefined);
+      yield* Deferred.await(resume);
+    }
+    yield* Ref.set(kept, n);
+  }));
+  const first = yield* Effect.forkChild(machine.send({ type: "inc" }));
+  yield* Deferred.await(firstSaving);
+  let source = "first";
+  const pending = yield* Effect.forkChild(Effect.flip(machine.send({ type: "inc" }, () => source === "first")), { startImmediately: true });
+  source = "replacement";
+  yield* Deferred.succeed(resume, undefined);
+  yield* Fiber.join(first);
+  return [(yield* Fiber.join(pending))._tag, yield* machine.get(), yield* machine.send({ type: "inc" }, (current) => current === 1)];
+}));
+assert.deepEqual(outcome, ["Rejected", 1, 2]);`], root);
     assert.equal(kept.status, 0, kept.stdout + kept.stderr);
     // An owner's package.json decides for its own gen/, whatever the root's says.
     const tree = scratch({ "spec/index.md": "# Product\n", "spec/app/index.md": ruleSpec(COUNTER), "spec/plain/index.md": ruleSpec(COUNTER), "apps/app/package.json": manifest("@scratch/app"), "apps/plain/package.json": "{}" });
@@ -4683,12 +4707,15 @@ test("the lint refuses, in a project's own code, a comment that is neither a cit
   const eslint = new ESLint({ cwd: project });
   const found = async (file: string, lines: string[]) => (await eslint.lintText(lines.join("\n"), { filePath: path.join(project, file) }))[0]!.messages
     .filter((m) => m.fatal || m.ruleId === "no-console" || m.ruleId?.startsWith("code/")).map((m) => `${m.line} ${m.ruleId ?? "inline config"}`);
-  const specFile = "spec/app/index.md";
+  const spec = readSpecs(project).find((s) => s.stories.length && s.rules.length);
+  const specFile = spec?.file ?? "spec/app/index.md";
+  const storyHeading = spec ? spec.stories[0].title : "Story: Say hello";
+  const ruleHeading = spec ? heading(spec.rules[0]) : "The number of greetings is never negative";
   assert.deepEqual(await found("apps/app/src/probe.vibe", [
-    `// ${specFile}, "Story: Say hello"; ${specFile}, "The number of greetings is never negative"`,
-    `/* ${specFile}, "Story: Say hello" */`,
+    `// ${specFile}, "${storyHeading}"; ${specFile}, "${ruleHeading}"`,
+    `/* ${specFile}, "${storyHeading}" */`,
     "//@ ghost",
-    "/** @model spec/app/index.md */",
+    `/** @model ${specFile} */`,
     "/** @throws {never} */",
     "// a note",
     "/** What it is. */",
