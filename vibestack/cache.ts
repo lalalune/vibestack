@@ -118,7 +118,7 @@ type Check = {
   evaluators: Map<string, Evaluator>;
   pending: Map<string, Buffer>;
   pendingDafny: Map<string, Buffer>;
-  verify: Set<Program>;
+  verify: Set<Pick<Program, "unchanged">>;
   solverAt?: string;
   dafnyBytes: number;
   touched: Set<string>;
@@ -141,6 +141,7 @@ function pendingLimit(check: Check) {
 
 function includePrograms(check: Check) {
   for (const program of check.programs.values()) if (program?.id) check.verify.add(program);
+  for (const evaluator of check.evaluators.values()) check.verify.add(evaluator);
 }
 
 function resetPending(check: Check) {
@@ -153,7 +154,7 @@ function resetPending(check: Check) {
 
 function verifyPrograms(check: Check, complete: boolean): boolean {
   if (complete) includePrograms(check);
-  const replaced = [...check.verify, ...check.evaluators.values()].some((tool) => !tool.unchanged());
+  const replaced = [...check.verify].some((tool) => !tool.unchanged());
   if (!replaced && !check.changed) return true;
   check.changed = true;
   resetPending(check);
@@ -1039,7 +1040,10 @@ export function store(memory: Memory, raw: Entry, value: unknown, source?: { pro
   if (!projected) memory.used.add(raw.name);
   const check = checking.getStore();
   if (unsure || check?.changed || check?.closed || !reusable) return;
-  if (evaluator !== undefined && !stableInstallation(evaluator.unchanged())) return;
+  if (evaluator) {
+    if (check) check.verify.add(evaluator);
+    else if (!evaluator.unchanged()) return;
+  }
   const action = source === "dafny" ? undefined : source;
   if (action && !check && !action.program.unchanged()) return;
   const compact = projected && memory.actionProjection?.encode(value);
