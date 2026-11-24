@@ -185,7 +185,7 @@ function publishDafny(check: Check) {
   check.dafnyBytes = 0;
 }
 
-export async function certifyInstallation() {
+export function certifyInstallation() {
   const check = checking.getStore();
   if (!check) return;
   publishDafny(check);
@@ -230,7 +230,7 @@ export const steady = <T>(run: () => Promise<T>) => {
   return checking.run(check, async () => {
     try {
       const result = await run();
-      if (!check.certified) await certifyInstallation();
+      if (!check.certified) certifyInstallation();
       return result;
     } finally {
       check.closed = true;
