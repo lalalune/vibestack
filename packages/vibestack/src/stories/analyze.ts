@@ -204,6 +204,7 @@ export function programs(root: string, configs: Map<string, string | undefined>,
         const exists = ts.sys.directoryExists(dir);
         const input = !exists && owned(dir);
         if (input) record(["directory", rel(input)]);
+        else if (!exists && /[\\/]node_modules(?:[\\/]@[^\\/]+)?(?:[\\/][^\\/]+)?$/.test(dir)) record(["directory", rel(dir)]);
         return exists;
       },
       readFile(file) {

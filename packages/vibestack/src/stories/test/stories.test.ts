@@ -350,6 +350,13 @@ it("rewrites only what a change touches, and removes what a deleted component le
     symlinkSync(join(workspace, "fields"), link, "junction");
     expectField(["second"]);
   }
+  const outer = join(workspace, "node_modules/@workspace/fields");
+  mkdirSync(dirname(outer), { recursive: true });
+  symlinkSync(join(workspace, "elsewhere"), outer, "junction");
+  rmSync(link);
+  expectField(["first"]);
+  symlinkSync(join(workspace, "fields"), link, "junction");
+  expectField(["second"]);
   writeFiles(workspace, {
     "ui/tsconfig.json": '{"compilerOptions":{"jsx":"preserve","noLib":true,"types":[]}}',
     "ui/src/Owner.tsx": 'export function Owner() { return <button/> }',
