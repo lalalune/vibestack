@@ -108,7 +108,7 @@ export function owner(root: string, spec: string, observe?: (file: string) => vo
   const [top, name, below] = spec.split("/");
   if (top !== "spec" || below === undefined) return undefined;
   observe?.(path.join(root, "package.json"));
-  const exists = (file: string) => { observe?.(file); return fs.existsSync(file); };
+  const exists = observe ? (file: string) => { observe(file); return fs.existsSync(file); } : fs.existsSync;
   return specOwnerPaths(root, name).find((dir) => exists(path.join(root, dir, "package.json")) && !exists(path.join(root, dir, "spec")));
 }
 /**

@@ -2,7 +2,7 @@
 // Vitest files that run every story: one for a simulated DOM and one for a real browser.
 // A component whose inputs hash as they did last time is not analyzed or written again.
 import { createHash } from "node:crypto";
-import { type FSWatcher, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
+import { type FSWatcher, type Stats, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unwatchFile, watch, watchFile, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import { type Found, type Prop, analyze, beside, compare, modelFile, modelTag, packageOf, programs, sources } from "./analyze.ts";
@@ -57,6 +57,8 @@ export function listener(root: string, out: string | undefined, run: (observe: (
   const output = resolve(root, out ?? outOf(root));
   const changes = watched(root, output);
   const subscriptions = new Map<string, { id: string; names: Set<string>; watcher: FSWatcher }>();
+  const missing = new Set<string>();
+  const reappeared = (stat: Stats) => { if (stat.nlink) schedule(); };
   let inputs = new Set<string>();
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
@@ -91,14 +93,18 @@ export function listener(root: string, out: string | undefined, run: (observe: (
     }
     inputs = paths;
     const present = new Set<string>();
-    let attached = false;
+    let changed = false;
     for (const [dir, names] of directories) {
       const stat = statSync(dir, { bigint: true, throwIfNoEntry: false });
       if (!stat?.isDirectory()) continue;
       present.add(dir);
       const id = `${stat.dev}:${stat.ino}`;
       const prior = subscriptions.get(dir);
-      if (prior?.id === id) { prior.names = names; continue; }
+      if (prior?.id === id) {
+        if ([...names].some((name) => !prior.names.has(name))) changed = true;
+        prior.names = names;
+        continue;
+      }
       let watcher: FSWatcher;
       try {
         watcher = watch(dir, { persistent: false }, (_, name) => {
@@ -115,14 +121,30 @@ export function listener(root: string, out: string | undefined, run: (observe: (
         schedule();
       });
       subscriptions.set(dir, { id, names, watcher });
-      attached = true;
+      changed = true;
       prior?.watcher.close();
     }
     for (const [dir, sub] of subscriptions) if (!present.has(dir)) {
       subscriptions.delete(dir);
       sub.watcher.close();
+      changed = true;
     }
-    if (attached) schedule();
+    const absent = new Set<string>();
+    for (const [dir, names] of directories) if (present.has(dir)) {
+      for (const name of names) {
+        const path = join(dir, name);
+        if (existsSync(path)) continue;
+        absent.add(path);
+        if (missing.has(path)) continue;
+        watchFile(path, { persistent: false, interval: 500 }, reappeared);
+        missing.add(path);
+      }
+    }
+    for (const path of missing) if (!absent.has(path)) {
+      unwatchFile(path, reappeared);
+      missing.delete(path);
+    }
+    if (changed) schedule();
   };
   refresh();
   return {
@@ -135,6 +157,8 @@ export function listener(root: string, out: string | undefined, run: (observe: (
       clearTimeout(timer);
       for (const sub of subscriptions.values()) sub.watcher.close();
       subscriptions.clear();
+      for (const path of missing) unwatchFile(path, reappeared);
+      missing.clear();
     },
   };
 }
