@@ -125,13 +125,24 @@ export function beside(abs: string, names: string[]): string[] {
 export type Lookup = [kind: "file" | "directory", file: string] | [kind: "manifest" | "realpath", file: string, value: string];
 interface Imports { files: string[]; lookups: Lookup[] }
 
-export function programs(root: string, configs: Map<string, string | undefined>) {
+export function programs(root: string, configs: Map<string, string | undefined>, configLookups: Lookup[]) {
+  const rel = (file: string) => relative(root, file).replaceAll("\\", "/");
   const fail = (problem: ts.Diagnostic) => {
     throw new Error(ts.flattenDiagnosticMessageText(problem.messageText, "\n"));
   };
   const given = ts.getParsedCommandLineOfConfigFile(join(root, "tsconfig.json"), {}, {
     ...ts.sys, onUnRecoverableConfigFileDiagnostic: fail,
     readDirectory: () => [],
+    directoryExists(dir) {
+      const exists = ts.sys.directoryExists(dir);
+      if (!exists) configLookups.push(["directory", rel(dir)]);
+      return exists;
+    },
+    realpath(file) {
+      const resolved = ts.sys.realpath!(file);
+      if (resolved !== file) configLookups.push(["realpath", rel(file), rel(resolved)]);
+      return resolved;
+    },
     fileExists(file) {
       const exists = ts.sys.fileExists(file);
       if (!exists) configs.set(file, undefined);
@@ -140,6 +151,13 @@ export function programs(root: string, configs: Map<string, string | undefined>)
     readFile(file) {
       const content = ts.sys.readFile(file);
       configs.set(file, content);
+      if (content !== undefined) {
+        const resolved = ts.sys.realpath!(file);
+        if (resolved !== file) {
+          configs.set(resolved, content);
+          configLookups.push(["realpath", rel(file), rel(resolved)]);
+        }
+      }
       return content;
     },
   })!.options;
@@ -156,7 +174,6 @@ export function programs(root: string, configs: Map<string, string | undefined>)
   const imports = new Map<string, Imports>();
   const installed = (file: string) => /(^|[\\/])node_modules([\\/]|$)/.test(file);
   const links = new Map<string, string | undefined>();
-  const rel = (file: string) => relative(root, file).replaceAll("\\", "/");
   let moduleCache: ts.ModuleResolutionCache;
   host.resolveModuleNameLiterals = (literals, from, redirected, options, source) => {
     const dependencies = new Set<string>();

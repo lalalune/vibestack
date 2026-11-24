@@ -11,7 +11,7 @@ import { type Plan, type Story, plan } from "./variants.ts";
 export type { Prop, Story };
 
 /** Part of every hash: raise it when the same inputs would be written differently. */
-const VERSION = 12;
+const VERSION = 13;
 
 export interface Component {
   id: string;
@@ -262,6 +262,7 @@ const browser = (files: string[], preview: string | undefined) =>
 export function generator({ root, out = outOf(root), cap = 12 }: Options): (observe?: (file: string) => void) => Result {
   out = resolve(root, out);
   let configured = new Map<string, string | undefined>();
+  let configLookups: Lookup[] = [];
   let build: ReturnType<typeof programs>;
   let built: ReturnType<ReturnType<typeof programs>> | undefined;
   const rel = (file: string) => relative(root, file).replaceAll("\\", "/");
@@ -291,7 +292,7 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
   const inputsOf = (file: string, names: string[]) => {
     const seen = new Set([file, ...beside(file, names), ...configured.keys()]);
     packageOf(dirname(file), (manifest) => seen.add(manifest));
-    const lookups = new Map<string, Lookup>();
+    const lookups = new Map<string, Lookup>(configLookups.map((lookup) => [lookup[0] + "\0" + lookup[1], lookup]));
     for (const each of seen) {
       const imported = built!.imports.get(each);
       if (!imported) continue;
@@ -303,11 +304,6 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
 
   return (observe?: (file: string) => void) => {
     built = undefined;
-    if (!build || [...configured].some(([file, before]) => before !== ts.sys.readFile(file))) {
-      const configs = new Map<string, string | undefined>();
-      build = programs(root, configs);
-      configured = configs;
-    }
     const manifest = join(out, MANIFEST);
     const known: Record<string, Entry> = existsSync(manifest) ? JSON.parse(readFileSync(manifest, "utf8")) : {};
     const written: string[] = [];
@@ -343,6 +339,12 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
       }
       return states.get(key) === (before ?? false);
     };
+    if (!build || !configLookups.every(valid) || [...configured].some(([file, before]) => before !== read(file))) {
+      const configs = new Map<string, string | undefined>();
+      configLookups = [];
+      build = programs(root, configs, configLookups);
+      configured = configs;
+    }
     let reset = false;
     const fresh = (file: string, entry: Entry | undefined) => {
       if (!entry?.lookups || !entry.lookups.every(valid)) {

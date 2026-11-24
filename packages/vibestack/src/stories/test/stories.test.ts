@@ -313,6 +313,20 @@ it("rewrites only what a change touches, and removes what a deleted component le
   rmSync(join(workspace, "options"));
   expectField(["second"]);
 
+  writeFiles(workspace, {
+    "ui/tsconfig.json": '{"extends":"@settings/base"}',
+    "node_modules/@settings/base/package.json": '{"name":"@settings/base"}',
+    "node_modules/@settings/base/tsconfig.json": options([join(workspace, "fields")]),
+  });
+  expectField(["second"]);
+  writeFiles(workspace, {
+    "ui/node_modules/@settings/base/package.json": '{"name":"@settings/base"}',
+    "ui/node_modules/@settings/base/tsconfig.json": options([join(workspace, "preferred")]),
+  });
+  expectField(["first"]);
+  rmSync(join(ui, "node_modules/@settings"), { recursive: true });
+  expectField(["second"]);
+
   const link = join(ui, "node_modules/@workspace/fields");
   mkdirSync(dirname(link), { recursive: true });
   symlinkSync(join(workspace, "fields"), link, "junction");
