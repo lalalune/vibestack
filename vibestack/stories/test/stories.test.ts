@@ -1,6 +1,6 @@
 // The generator on a copy of test/fixtures that nothing else reads or writes, in the system's temporary
 // directory. The copy needs no install: fixtures/modules, its `node_modules`, declares what the fixtures import.
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { afterAll, expect, it } from "vitest";
@@ -215,6 +215,29 @@ it("writes the same bytes again, and nothing when nothing changed", () => {
   rmSync(out, { recursive: true });
   expect(generator({ root })().written).toHaveLength(10);
   expect(everything()).toEqual(before);
+  const mapped = join(root, "mapped-properties");
+  const componentFile = "src/ZMapped.tsx";
+  const source = [
+    "interface Flags { middle?: boolean; last?: boolean; first?: boolean }",
+    'type Selected = { [Key in "first" | "middle" | "last"]?: Flags[Key] };',
+    "/** First set of flags. */",
+    "export function ZMapped({ first, middle, last }: Selected) { return <button/> }",
+  ].join("\n");
+  writeFiles(mapped, {
+    "package.json": '{"name":"@fixture/kit"}',
+    "tsconfig.json": readFileSync(join(root, "tsconfig.json"), "utf8"),
+    "src/AReverse.tsx": 'export function AReverse({ pick }: { pick?: "last" | "middle" | "first" }) { return <button/> }',
+    [componentFile]: source,
+  });
+  const file = join(mapped, componentFile), time = new Date("2020-10-10T10:10:10Z");
+  utimesSync(file, time, time);
+  const generate = generator({ root: mapped }), original = generate();
+  writeFileSync(file, source.replace("First set", "Other set"));
+  utimesSync(file, time, time);
+  const edited = generate(), clean = generator({ root: mapped, out: join(mapped, "control") })();
+  expect(edited.index).toEqual(clean.index);
+  expect(component("ZMapped", edited)).toMatchObject({ description: "Other set of flags.", props: component("ZMapped", original).props });
+  expect(generate()).toMatchObject({ written: [], analyzed: 0 });
 });
 
 it("rewrites only what a change touches, and removes what a deleted component left", () => {
