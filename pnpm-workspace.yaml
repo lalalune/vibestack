@@ -5,6 +5,8 @@ packages:
   - template/apps/*
 
 linkWorkspacePackages: true
+publicHoistPattern:
+  - vibestack
 
 # One version of each shared dependency; a package writes "catalog:".
 # Effect and VibeLang are pinned exactly where `spec init` reads them:
