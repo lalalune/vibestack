@@ -106,11 +106,13 @@ export function specOwnerPaths(root: string, name: string): string[] {
  * `packages/<name>`, if that is a package with no `spec/` of its own. The root's check generates into its `gen/` and
  * checks its code (SPEC.md, "One spec tree").
  */
-export function owner(root: string, spec: string): string | undefined {
+export function owner(root: string, spec: string, observe?: (file: string) => void): string | undefined {
   const { spec: specConfig } = loadConfig(root);
   const [top, name, below] = spec.split("/");
   if (top !== specConfig.dir || below === undefined || isExcludedSpecPath(`${specConfig.dir}/${name}`, specConfig)) return undefined;
-  return specOwnerPaths(root, name).find((dir) => fs.existsSync(path.join(root, dir, "package.json")) && !fs.existsSync(path.join(root, dir, specConfig.dir)));
+  observe?.(path.join(root, "package.json"));
+  const exists = observe ? (file: string) => { observe(file); return fs.existsSync(file); } : fs.existsSync;
+  return specOwnerPaths(root, name).find((dir) => exists(path.join(root, dir, "package.json")) && !exists(path.join(root, dir, specConfig.dir)));
 }
 /**
  * The directories whose code a check reads, each as the prefix of a path from the root: "" for the root's own

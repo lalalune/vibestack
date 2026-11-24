@@ -1,10 +1,10 @@
 // The generator on a copy of test/fixtures that nothing else reads or writes, in the system's temporary
 // directory. The copy needs no install: fixtures/modules, its `node_modules`, declares what the fixtures import.
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { type Component, generator, watched } from "../emit.ts";
+import { type Component, generator, listener, watched } from "../emit.ts";
 
 const root = mkdtempSync(join(realpathSync(tmpdir()), "stories-fixtures-"));
 cpSync(join(import.meta.dirname, "fixtures"), root, { recursive: true });
@@ -125,7 +125,7 @@ it("plays a disabled or loading story to check that a click, Enter or Space call
   expect(read("kit-kinds.stories.tsx")).not.toContain("refuses");
 });
 
-it("links a component to its spec model and renders it from the generated initial state", () => {
+it("links a component to its spec model and renders it from the generated initial state", async () => {
   expect(component("Receipt")).toMatchObject({ model: { spec: "spec/index.md", module: "index", state: "Order", events: ["addItem", "pay"] }, design: ["design.md#receipt"] });
   expect(component("Receipt").stories[1]).toEqual({ id: "kit-receipt--model", name: "Model", kind: "model", args: { order: { status: "Draft", units: 0 } } });
   expect(read("kit-receipt.stories.tsx")).toContain('import { initial } from "../../gen/index.ts";');
@@ -191,6 +191,26 @@ it("links a component to its spec model and renders it from the generated initia
   expect(generator({ root: ui, out: join(ui, "generated/empty") })().diagnostics).toEqual(empty.diagnostics);
   writeFiles(ui, { "gen/workflow.ts": from("../../../domain.ts", 4) });
   compare(4, "../../gen/workflow.ts");
+  rmSync(join(ui, "gen/workflow.ts"));
+  writeFiles(workspace, { "gen/workflow.ts": from("../domain.ts", 5) });
+  let last = generate();
+  const watchedStories = listener(ui, undefined, (observe) => { last = generate(observe); });
+  const shows = (units: number) => expect.poll(() => component("Receipt", last).stories[1]?.args, { timeout: 10000 }).toEqual({ order: { status: "Draft", units } });
+  try {
+    await shows(5);
+    writeFiles(workspace, { "gen/replacement.ts": from("../domain.ts", 6) });
+    renameSync(join(workspace, "gen/replacement.ts"), join(workspace, "gen/workflow.ts"));
+    await shows(6);
+    writeFiles(workspace, { "packages/plugin-workflows/gen/workflow.ts": from("../../../domain.ts", 7) });
+    await shows(7);
+    rmSync(join(workspace, "packages/plugin-workflows/gen"), { recursive: true });
+    await shows(6);
+    writeFiles(workspace, { "packages/plugin-workflows/gen/workflow.ts": from("../../../domain.ts", 8) });
+    await shows(8);
+  } finally {
+    watchedStories.close();
+  }
+
 });
 
 it("leaves a story to the hand-written file that has one of its name", () => {
@@ -215,6 +235,29 @@ it("writes the same bytes again, and nothing when nothing changed", () => {
   rmSync(out, { recursive: true });
   expect(generator({ root })().written).toHaveLength(10);
   expect(everything()).toEqual(before);
+  const mapped = join(root, "mapped-properties");
+  const componentFile = "src/ZMapped.tsx";
+  const source = [
+    "interface Flags { middle?: boolean; last?: boolean; first?: boolean }",
+    'type Selected = { [Key in "first" | "middle" | "last"]?: Flags[Key] };',
+    "/** First set of flags. */",
+    "export function ZMapped({ first, middle, last }: Selected) { return <button/> }",
+  ].join("\n");
+  writeFiles(mapped, {
+    "package.json": '{"name":"@fixture/kit"}',
+    "tsconfig.json": readFileSync(join(root, "tsconfig.json"), "utf8"),
+    "src/AReverse.tsx": 'export function AReverse({ pick }: { pick?: "last" | "middle" | "first" }) { return <button/> }',
+    [componentFile]: source,
+  });
+  const file = join(mapped, componentFile), time = new Date("2020-10-10T10:10:10Z");
+  utimesSync(file, time, time);
+  const generate = generator({ root: mapped }), original = generate();
+  writeFileSync(file, source.replace("First set", "Other set"));
+  utimesSync(file, time, time);
+  const edited = generate(), clean = generator({ root: mapped, out: join(mapped, "control") })();
+  expect(edited.index).toEqual(clean.index);
+  expect(component("ZMapped", edited)).toMatchObject({ description: "Other set of flags.", props: component("ZMapped", original).props });
+  expect(generate()).toMatchObject({ written: [], analyzed: 0 });
 });
 
 it("rewrites only what a change touches, and removes what a deleted component left", () => {
@@ -228,6 +271,41 @@ it("rewrites only what a change touches, and removes what a deleted component le
   expect(stories("Many", run())).toContain("prop kit-many--hue-crimson");
   edit("tsconfig.json", (text) => text.replace('"strict": true', '"strict": false'));
   expect(run()).toMatchObject({ written: [".cache/manifest.json"], analyzed: 7 });
+
+  const workspace = join(root, "module-resolution");
+  const ui = join(workspace, "ui");
+  const options = (paths: string[]) => JSON.stringify({ compilerOptions: {
+    jsx: "react-jsx", noLib: true, types: [], module: "esnext", moduleResolution: "bundler", paths: { "@fields": paths },
+  } });
+  const props = (field: string) => `export interface Props { ${field}: string }`;
+  writeFiles(workspace, {
+    "ui/package.json": '{"name":"@fixture/kit"}',
+    "ui/tsconfig.json": '{"extends":"../options.json"}',
+    "options.json": options(["./preferred", "./fields"]),
+    "ui/src/View.tsx": 'import type { Props } from "@fields"; export function View(props: Props) { return <button>{String(props)}</button>; }',
+  });
+  const generate = generator({ root: ui });
+  const expectField = (names: string[], analyzed = 1) => {
+    const update = generate();
+    expect(component("View", update).props.map((prop) => prop.name)).toEqual(names);
+    expect(update.analyzed).toBe(analyzed);
+  };
+  expectField([]);
+  writeFiles(workspace, { "fields/package.json": '{"types":"one.d.ts"}', "fields/one.d.ts": props("first") });
+  expectField(["first"]);
+  writeFiles(workspace, { "preferred.ts": "" });
+  expectField([]);
+  rmSync(join(workspace, "preferred.ts"));
+  expectField(["first"]);
+  writeFiles(workspace, { "fields/two.d.ts": props("second"), "fields/package.json": '{"types":"two.d.ts"}' });
+  expectField(["second"]);
+  writeFiles(workspace, { "preferred.ts": props("first"), "options.json": options(["./preferred"]) });
+  expectField(["first"]);
+  writeFiles(workspace, { "options.json": options(["./fields"]) });
+  expectField(["second"]);
+  writeFiles(workspace, { "fields/noise.ts": props("unused") });
+  expectField(["second"], 0);
+
 
   writeFileSync(join(root, "src/Table.meta.ts"), 'export const meta = { args: { rows: [{ id: 1 }], sort: { by: "id" } } };\n');
   const given = run();

@@ -100,7 +100,7 @@ describe("the documents name what exists", () => {
     const workspace = (file: string) => /^(template\/|packages\/create-vibestack\/|apps\/)/.test(file);
     const [shardA, shardB, packed] = tools;
     const toolInput = (file: string) => ![docsSource, examplesSource].includes(file)
-      && ((!workspace(file) && PACKED.includes(file)) || /^(packages\/vibestack\/|packages\/studio\/|selftest\/|examples\/order\/|\.agents\/skills\/)/.test(file));
+      && ((!workspace(file) && !file.startsWith("patches/") && PACKED.includes(file)) || /^(packages\/vibestack\/|packages\/studio\/|selftest\/|examples\/order\/|\.agents\/skills\/)/.test(file));
     assert.deepEqual({
       docs: missed(docs, () => true),
       examples: missed(examples, (file) => ![toolSource, docsSource, toolMetadata].includes(file) && /^(examples\/|packages\/vibestack\/(?!src\/(testing|stories|design)\/test\/))/.test(file)),
@@ -181,6 +181,9 @@ describe("the documents name what exists", () => {
         fs.cpSync(path.join(project, file), destination, { verbatimSymlinks: true });
       }
     }
+    const patch = "patches/fixture.patch";
+    fs.mkdirSync(path.join(root, "patches"), { recursive: true });
+    fs.writeFileSync(path.join(root, patch), "a workspace dependency patch\n");
     const staged = await exec("git", ["add", "-A"], root);
     assert.equal(staged.status, 0, staged.stderr);
     const evaluatorHome = path.join(root, "custom quint home");
@@ -209,6 +212,7 @@ describe("the documents name what exists", () => {
     };
     const studio = (ids: string[]) => ids.filter((id) => /^(vibestack-studio#(?!check)|@repo\/(ui#(build|typecheck)|design-system#build)|\/\/#lint:css)/.test(id));
     const append = (file: string, text = "\nMore words.\n") => () => fs.appendFileSync(path.join(root, file), text);
+    assert.ok((await changedBy(append(patch))).includes("//#selftest:tools:rest"));
     const vibeDeclared = ["packages", "apps", "template/packages", "template/apps"].flatMap(within)
       .filter((dir) => fs.existsSync(path.join(root, dir, "tsconfig.json")) && read(`${dir}/tsconfig.json`, root).includes(".vibe/declarations"))
       .map((dir) => `${JSON.parse(read(`${dir}/package.json`, root)).name}#typecheck`);

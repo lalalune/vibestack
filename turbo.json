@@ -327,6 +327,7 @@
         "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static,__traces__}/**",
         "!**/.DS_Store",
         "!{template,packages/studio,examples}/**/gen/**",
+        "patches/**",
         "apps/*/package.json",
         ".agents/**",
         "AGENTS.md",
