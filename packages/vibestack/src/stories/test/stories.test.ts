@@ -264,7 +264,7 @@ it("rewrites only what a change touches, and removes what a deleted component le
   edit("src/Tag.tsx", (text) => text.replace('lg: "l" }', 'lg: "l", xl: "x" }'));
   expect(run()).toMatchObject({ written: ["kit-tag.stories.tsx", "catalog.json", ".cache/manifest.json"], removed: [], analyzed: 1 });
   expect(stories("Tag", run())).toContain("prop kit-tag--size-xl");
-  expect(["src/Tag.tsx", "tsconfig.json", "package.json", "generated/stories/kit-tag.stories.tsx", "node_modules/react/index.ts", ".cache/Tag.tsx"].filter(watched(root))).toEqual(["src/Tag.tsx", "tsconfig.json", "package.json"]);
+  expect(["src/Tag.tsx", "packages/views/src/New.tsx", "src/Tag.test.tsx", "test/unrelated.test.ts", "src/unreferenced.ts", "tsconfig.json", "package.json", "generated/stories/kit-tag.stories.tsx", "node_modules/react/index.ts", ".cache/Tag.tsx"].filter(watched(root))).toEqual(["src/Tag.tsx", "packages/views/src/New.tsx", "tsconfig.json", "package.json"]);
 
   // A type reached through a path alias is an input, and so is the tsconfig that names the alias.
   edit("src/shades.ts", (text) => text.replace('"red"', '"crimson"'));

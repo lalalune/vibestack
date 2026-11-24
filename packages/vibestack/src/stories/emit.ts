@@ -2,10 +2,11 @@
 // Vitest files that run every story: one for a simulated DOM and one for a real browser.
 // A component whose inputs hash as they did last time is not analyzed or written again.
 import { createHash } from "node:crypto";
-import { type FSWatcher, type Stats, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unwatchFile, watch, watchFile, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { type FSWatcher, type Stats, existsSync, readFileSync, readdirSync, rmSync, statSync, unwatchFile, watch, watchFile } from "node:fs";
+import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from "node:path";
 import ts from "typescript";
-import { type Found, type Lookup, type Prop, analyze, beside, compare, modelFile, modelTag, packageOf, programs, sources } from "./analyze.ts";
+import { writeWhole } from "../run.ts";
+import { type Found, type Lookup, type Prop, analyze, beside, compare, isComponentSource, modelFile, modelTag, packageOf, programs, sources } from "./analyze.ts";
 import { type Plan, type Story, plan } from "./variants.ts";
 
 export type { Prop, Story };
@@ -48,10 +49,19 @@ const COMPONENTS = ["src/**/*.tsx", "packages/*/src/**/*.tsx"];
 export const outOf = (root: string) => join(root, "generated", "stories");
 /** What each source gave, kept in a hidden directory, which no stage's key reads: it changes when only its inputs' hashes do. */
 const MANIFEST = ".cache/manifest.json";
-/** Whether a changed path can change the stories. */
+const inside = (dir: string, file: string) => {
+  const rel = relative(dir, file);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+};
+/** An undiscovered component or workspace directory that can add sources to the catalog. */
 export const watched = (root: string, out = outOf(root)) => (file: string) => {
-  const path = relative(root, resolve(root, file));
-  return /\.tsx?$|^tsconfig\.json$|(^|[\\/])package\.json$/.test(path) && !/(^|[\\/])(node_modules|\.[^\\/]+)[\\/]/.test(path) && relative(resolve(root, out), resolve(root, file)).startsWith("..");
+  const absolute = resolve(root, file);
+  const name = relative(root, absolute).split(sep).join("/");
+  if (!inside(root, absolute) || inside(resolve(root, out), absolute) || /(^|\/)(node_modules|\.[^/]+)\//.test(name)) return false;
+  if (name === "tsconfig.json" || basename(absolute) === "package.json") return true;
+  if (isComponentSource(name) && COMPONENTS.some((glob) => matchesGlob(name, glob))) return true;
+  return /^(?:src(?:\/|$)|packages(?:$|\/[^/]+(?:$|\/src(?:\/|$))))/.test(name)
+    && statSync(absolute, { throwIfNoEntry: false })?.isDirectory() === true;
 };
 export function listener(root: string, out: string | undefined, run: (observe: (file: string) => void) => void) {
   const output = resolve(root, out ?? outOf(root));
@@ -62,10 +72,6 @@ export function listener(root: string, out: string | undefined, run: (observe: (
   let inputs = new Set<string>();
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
-  const inside = (dir: string, file: string) => {
-    const rel = relative(dir, file);
-    return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-  };
   const schedule = () => {
     if (closed) return;
     clearTimeout(timer);
@@ -81,8 +87,12 @@ export function listener(root: string, out: string | undefined, run: (observe: (
     const paths = new Set<string>();
     run((file) => paths.add(file));
     const directories = new Map<string, Set<string>>();
+    const localParents = new Set<string>();
     for (const file of paths) {
-      if (inside(root, file)) continue;
+      if (inside(root, file)) {
+        for (let dir = dirname(file); dir !== root && inside(root, dir) && !localParents.has(dir); dir = dirname(dir)) localParents.add(dir);
+        continue;
+      }
       for (let child = file; !inside(child, root); child = dirname(child)) {
         const parent = dirname(child);
         if (parent === child) break;
@@ -91,7 +101,7 @@ export function listener(root: string, out: string | undefined, run: (observe: (
         names.add(basename(child));
       }
     }
-    inputs = paths;
+    inputs = new Set([...paths, ...localParents]);
     const present = new Set<string>();
     let changed = false;
     for (const [dir, names] of directories) {
@@ -148,7 +158,8 @@ export function listener(root: string, out: string | undefined, run: (observe: (
   };
   refresh();
   return {
-    change(file: string) {
+    change(file?: string) {
+      if (!file) { schedule(); return; }
       const absolute = resolve(root, file);
       if (!inside(output, absolute) && (inputs.has(absolute) || changes(file))) schedule();
     },
@@ -312,8 +323,7 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
     const written: string[] = [];
     const write = (name: string, text: string) => {
       if (existsSync(join(out, name)) && readFileSync(join(out, name), "utf8") === text) return;
-      mkdirSync(dirname(join(out, name)), { recursive: true });
-      writeFileSync(join(out, name), text);
+      writeWhole(join(out, name), text);
       written.push(name);
     };
 
@@ -397,7 +407,10 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
     const tested = [...new Set([...outputs, ...Object.values(entries).flatMap((e) => e.manual.map((file) => relative(out, join(root, file)).replaceAll("\\", "/")))])].sort(compare);
     write("catalog.json", `${JSON.stringify(index, null, 2)}\n`);
     write("stories.test.tsx", smoke(tested));
-    const preview = ["ts", "tsx", "js", "jsx"].map((ext) => join(root, ".storybook", `preview.${ext}`)).find(existsSync);
+    const preview = ["ts", "tsx", "js", "jsx"].map((ext) => join(root, ".storybook", `preview.${ext}`)).find((file) => {
+      observe?.(file);
+      return existsSync(file);
+    });
     write("stories.browser.test.tsx", browser(tested, preview && from(preview)));
     write(MANIFEST, `${JSON.stringify(entries)}\n`);
     const removed = (existsSync(out) ? readdirSync(out) : []).filter((name) => name.endsWith(".stories.tsx") && !outputs.includes(name));

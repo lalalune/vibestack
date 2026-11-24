@@ -98,10 +98,12 @@ export const modelFile = (abs: string, spec: string, observe?: (file: string) =>
 const ancestors = (dir: string): string[] => (dirname(dir) === dir ? [dir] : [dir, ...ancestors(dirname(dir))]);
 export const modelTag = (text: string) => /@model\s+(\S+)/.exec(text)?.[1];
 
+const skippedSource = /(^|\/)(node_modules|\.[^/]+)\/|\.(test|spec|stories|meta)\.tsx?$|\.d\.ts$/;
+export const isComponentSource = (file: string) => file.endsWith(".tsx") && !skippedSource.test(file);
+
 /** The component files the globs name, sorted: never tests, stories, metadata or anything installed. */
 export function sources(root: string, globs: string[]): string[] {
-  const skip = /(^|\/)(node_modules|\.[^/]+)\/|\.(test|spec|stories|meta)\.tsx?$|\.d\.ts$/;
-  return globSync(globs, { cwd: root }).map((file) => file.replaceAll("\\", "/")).filter((file) => file.endsWith(".tsx") && !skip.test(file)).sort().map((file) => join(root, file));
+  return globSync(globs, { cwd: root }).map((file) => file.replaceAll("\\", "/")).filter(isComponentSource).sort().map((file) => join(root, file));
 }
 
 /** Plain order of text, the same on every machine. */
