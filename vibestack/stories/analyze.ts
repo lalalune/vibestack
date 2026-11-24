@@ -1,8 +1,9 @@
 // Reads React components with the TypeScript checker: what each takes, what its metadata file gives, and
 // the spec model it shows. One Program serves every file, and the next run reuses it.
-import { existsSync, globSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, globSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import ts from "typescript";
+import { formatStamp } from "../run.ts";
 import { owner } from "../util.ts";
 
 /** A value in a metadata file that only running it would give, such as JSX or a function. */
@@ -118,7 +119,8 @@ export function programs(root: string): (files: string[]) => ts.Program {
   const parse = host.getSourceFile;
   const parsed = new Map<string, { stamp: string; file: ts.SourceFile | undefined }>();
   host.getSourceFile = (name, ...rest) => {
-    const stamp = `${ts.sys.getModifiedTime?.(name)?.getTime()}:${ts.sys.getFileSize?.(name)}`;
+    const stat = statSync(name, { bigint: true, throwIfNoEntry: false });
+    const stamp = stat ? formatStamp(stat) : "";
     if (parsed.get(name)?.stamp !== stamp) parsed.set(name, { stamp, file: parse(name, ...rest) });
     return parsed.get(name)!.file;
   };
@@ -353,6 +355,12 @@ export function analyze(built: ts.Program, abs: string): Found[] {
     const symbols = (first ? checker.getPropertiesOfType(checker.getTypeOfSymbolAtLocation(first, decl)) : [])
       // `children` is kept even when the component only passes it on with the rest: it is what most of them show.
       .filter((p) => p.name === "children" || taken.has(p.name) || mentioned.has(p.name) || STATE.test(p.name) || p.declarations?.some(own));
+    symbols.sort((a, b) => {
+      const left = a.valueDeclaration ?? a.declarations?.[0];
+      const right = b.valueDeclaration ?? b.declarations?.[0];
+      return compare(left?.getSourceFile().fileName ?? "", right?.getSourceFile().fileName ?? "")
+        || (left?.pos ?? 0) - (right?.pos ?? 0) || compare(a.name, b.name);
+    });
     const props = symbols.map((p): Prop => {
       const type = checker.getTypeOfSymbolAtLocation(p, decl);
       const at = p.declarations?.find(own);

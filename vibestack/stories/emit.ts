@@ -11,7 +11,7 @@ import { type Plan, type Story, plan } from "./variants.ts";
 export type { Prop, Story };
 
 /** Part of every hash: raise it when the same inputs would be written differently. */
-const VERSION = 9;
+const VERSION = 10;
 
 export interface Component {
   id: string;
@@ -176,10 +176,10 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): () =>
   const from = (file: string) => JSON.stringify(relative(out, file).replaceAll("\\", "/").replace(/^(?!\.)/, "./"));
   // A file the Program read is hashed as the Program read it, so an edit made while it ran is seen by the next run.
   const text = (file: string) => built?.getSourceFile(file)?.text ?? (existsSync(file) ? readFileSync(file, "utf8") : "");
-  const hash = (component: string, inputs: string[]) => {
+  const hash = (component: string, inputs: string[], read = text) => {
     const sum = createHash("sha1").update(`${VERSION}:${cap}:${rel(out)}`);
     for (const file of inputs) {
-      const content = text(join(root, file));
+      const content = read(join(root, file));
       if (file === component) {
         const spec = modelTag(content);
         const model = spec && modelFile(join(root, file), spec);
@@ -222,7 +222,13 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): () =>
     };
 
     const files = sources(root, COMPONENTS);
-    const fresh = (file: string, e: Entry | undefined) => e && e.hash === hash(file, e.inputs) && e.outputs.every((name) => existsSync(join(out, name)));
+    const sourceText = new Map<string, string>();
+    const read = (file: string) => {
+      let value = sourceText.get(file);
+      if (value === undefined) sourceText.set(file, value = text(file));
+      return value;
+    };
+    const fresh = (file: string, e: Entry | undefined) => e && e.hash === hash(file, e.inputs, read) && e.outputs.every((name) => existsSync(join(out, name)));
     const stale = files.filter((file) => !fresh(rel(file), known[rel(file)]));
     if (stale.length) built = build(files);
     const entries: Record<string, Entry> = {};
