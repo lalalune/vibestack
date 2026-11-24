@@ -4707,10 +4707,12 @@ test("the lint refuses, in a project's own code, a comment that is neither a cit
   const eslint = new ESLint({ cwd: project });
   const found = async (file: string, lines: string[]) => (await eslint.lintText(lines.join("\n"), { filePath: path.join(project, file) }))[0]!.messages
     .filter((m) => m.fatal || m.ruleId === "no-console" || m.ruleId?.startsWith("code/")).map((m) => `${m.line} ${m.ruleId ?? "inline config"}`);
-  const spec = readSpecs(project).find((s) => s.stories.length && s.rules.length);
+  const spec = readSpecs(project).find((s) => s.file.startsWith("spec/")
+    && s.stories.some((story) => !story.title.includes('"'))
+    && s.rules.some((rule) => !heading(rule).includes('"')));
   const specFile = spec?.file ?? "spec/app/index.md";
-  const storyHeading = spec ? spec.stories[0].title : "Story: Say hello";
-  const ruleHeading = spec ? heading(spec.rules[0]) : "The number of greetings is never negative";
+  const storyHeading = spec?.stories.find((story) => !story.title.includes('"'))?.title ?? "Story: Say hello";
+  const ruleHeading = spec ? heading(spec.rules.find((rule) => !heading(rule).includes('"'))!) : "The number of greetings is never negative";
   assert.deepEqual(await found("apps/app/src/probe.vibe", [
     `// ${specFile}, "${storyHeading}"; ${specFile}, "${ruleHeading}"`,
     `/* ${specFile}, "${storyHeading}" */`,
