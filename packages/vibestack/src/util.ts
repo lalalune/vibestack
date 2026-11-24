@@ -172,8 +172,8 @@ export type Remember = <T>(fingerprint: string, run: () => Promise<T>, keep: (re
  */
 export type Inputs = "tests" | "types";
 
-/** What no test reads: a spec's prose, ledger and proofs, its Quint copy, and the prose `spec init` and these tools keep for people and agents at a package's top. */
-const PROSE = /^spec\/(?:.*\.md|lock\.json)$|\.proof\.dfy$|^gen\/[^/]*\.qnt$|^(?:README|AGENTS|CLAUDE|CONTRIBUTING|SPEC)\.md$/;
+/** What no test reads: a spec's prose and its Quint copy, and the prose `spec init` and these tools keep for people and agents at a package's top. */
+const PROSE = /^spec\/.*\.md$|^gen\/[^/]*\.qnt$|^(?:README|AGENTS|CLAUDE|CONTRIBUTING|SPEC)\.md$/;
 
 /** A package and the workspace packages it depends on, and theirs, each once: by its real directory and the name it is depended on by. */
 export function workspacePackages(root: string): { directory: string; name: string }[] {

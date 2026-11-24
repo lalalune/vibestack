@@ -17,6 +17,7 @@ import { Miniflare } from "miniflare";
 import { violated } from "../packages/vibestack/src/action.ts";
 import { cacheCredentials, collectGarbage, isActionEntry, withFormalCache, type installedProgram as lookupTool } from "../packages/vibestack/src/cache.ts";
 import { LIB_FILE, isolatedCopies, parseProofFile, readVerdict, splice } from "../packages/vibestack/src/prove.ts";
+import { heading } from "../packages/vibestack/src/parse.ts";
 import { precomputeSimulations, prepareSimulationReceipts } from "../packages/vibestack/src/formal.ts";
 import { exec, run as tool, toolCpuSeconds } from "../packages/vibestack/src/run.ts";
 import { pendingSpecs, showPending, writeLedger } from "../packages/vibestack/src/review.ts";
@@ -1213,7 +1214,8 @@ pure val amountValues = Set(0, 1)`;
   test("a test pass is remembered for what the tests read and a typecheck's for what the compiler read; runner receipts allow reuse but a forged Turbo environment does not; unchecked specs are noted", async () => {
     const ran = path.join(scratch({}), "ran");
     const root = fixtures(["door"], (f) => Object.assign(f, {
-      "package.json": JSON.stringify({ scripts: { test: `echo x >> ${JSON.stringify(ran)}` } }),
+      "package.json": JSON.stringify({ scripts: { test: `node -e "require('node:fs').readFileSync('fixtures/reviewed.proof.dfy')" && echo x >> ${JSON.stringify(ran)}` } }),
+      "fixtures/reviewed.proof.dfy": "lemma Reviewed() ensures true {}\n",
       "src/door.ts": 'import { one } from "../.shared/one.ts";\nexport const door: number = one;\n',
       ".shared/one.ts": "export const one = 1;\n",
     }));
@@ -1250,6 +1252,9 @@ pure val amountValues = Set(0, 1)`;
     fs.writeFileSync(path.join(root, "src/door.ts"), "export const door = 3;\n");
     await run(root);
     assert.equal(runs(), 4, "a receipt for older source cannot suppress the tests");
+    fs.rmSync(path.join(root, "fixtures/reviewed.proof.dfy"));
+    const missingFixture = await run(root);
+    assert.equal(missingFixture.said("tests", /^fail\n/)?.ok, false, missingFixture.text);
     const linked = scratch({ "package.json": '{"name":"linked","type":"module","main":"./dist/run.js"}', "dist/run.js": "export default true;" });
     const consumer = fixtures(["door"]);
     fs.mkdirSync(path.join(consumer, "node_modules"));
@@ -1279,8 +1284,8 @@ pure val amountValues = Set(0, 1)`;
       "kit/a.ts": [true, true], "kit/package.json": [true, true], "kit/spec/a.md": [false, false], "kit/nested/a.ts": [false, false],
       "kit/README.md": [false, false], "kit/fixtures/a.md": [true, false], "kit/test/a.test.ts": [false, false], "kit/gen/a.ts": [false, false], ".DS_Store": [false, false],
       "notes.md": [true, false], "README.md": [false, false], "AGENTS.md": [false, false], "style.css": [true, false], "gen/a.qnt": [false, false],
-      "gen/traces/a.b.0/0.itf.json": [false, false], "generated/stories/.cache/manifest.json": [false, false], "spec/a.md": [false, false], "spec/lock.json": [false, false],
-      "spec/a.proof.dfy": [false, false], "src/a.proof.dfy": [false, false],
+      "gen/traces/a.b.0/0.itf.json": [false, false], "generated/stories/.cache/manifest.json": [false, false], "spec/a.md": [false, false], "spec/lock.json": [true, false],
+      "spec/a.proof.dfy": [true, false], "src/a.proof.dfy": [true, false],
     }, "the tests read the package, its test fixtures, what its workspace dependencies ship to it and the fixtures they keep; the typecheck reads only scripts and JSON, and no traces or counterexamples; neither reads a spec's prose or its Quint copy, the prose kept for people and agents, the simulations' traces or the stories' bookkeeping");
     fs.writeFileSync(path.join(workspace, "kit/a.ts"), 'export * from "./gen/a.ts";\n');
     assert.deepEqual(changed("kit/gen/a.ts"), [true, true], "a dependency's gen/ is read once its code imports it");
@@ -2890,6 +2895,31 @@ function eachCheck() {
     assert.equal(changed.said("always", /alwaysSame|"Story \/ Same"/)?.ok, false, changed.text);
   });
 
+  test("a verifier process that outlives a change to LemmaScript classifies obligations with the installed emitter", { skip: process.platform === "win32" }, async () => {
+    const root = toolchain(scratch({ "package.json": '{"type":"module"}' }), "lsc");
+    const launcher = path.join(root, "node_modules/.bin/lsc");
+    fs.unlinkSync(launcher);
+    fs.writeFileSync(launcher, `#!/bin/sh\nexec "${path.join(nodeModules, ".bin/lsc")}" "$@"\n`, { mode: 0o755 });
+    const helper = path.join(root, "node_modules/.bin/dafny-emit.js");
+    fs.writeFileSync(helper, 'export { DAFNY_HELPER_NAMES } from "./names.mjs";');
+    const names = path.join(path.dirname(helper), "names.mjs");
+    fs.writeFileSync(names, "export const DAFNY_HELPER_NAMES = new Set();");
+    const probe = await exec(process.execPath, ["--input-type=module", "--eval", `
+      import fs from "node:fs";
+      import { prove } from "./vibestack/prove.ts";
+      import { steady } from "./vibestack/cache.ts";
+      const text = ${JSON.stringify(ONE)};
+      const unit = { unit: "one.ts", text, src: true, proofFile: "src/one.proof.dfy", imports: { text: "", lemmas: [] }, rests: [], externs: [], assumed: [], meaning: text };
+      const run = () => steady(() => prove({ root: process.cwd(), fresh: false, used: new Set() }, unit, { axioms: [] }));
+      const first = await run();
+      fs.writeFileSync(${JSON.stringify(names)}, 'export const DAFNY_HELPER_NAMES = new Set(["one_ensures"]);');
+      const next = await run();
+      process.stdout.write(JSON.stringify([first, next].map(({ total, unproved, errors }) => [total, unproved, errors])));
+    `], root);
+    assert.equal(probe.status, 0, probe.stderr);
+    assert.deepEqual(JSON.parse(probe.stdout), [[1, [], []], [0, [], []]]);
+  });
+
   test("proof and task cache identity follows verifier and compiler bytes rather than installation directories, read again only once they change", { skip: process.platform === "win32" }, async () => {
     const credentials = { apiUrl: "https://trusted-cache.example", writeToken: "test-only-publisher" };
     const trusted = { TURBO_API: credentials.apiUrl, TURBO_TOKEN: credentials.writeToken };
@@ -2979,27 +3009,34 @@ function eachCheck() {
     const checked = await exec(process.execPath, ["--input-type=module", "--eval", [
       'const fs = await import("node:fs");',
       `const { act } = await import(${JSON.stringify(path.join(project, "packages/vibestack/src/action.ts"))});`,
-      `const { entry, steady, solver } = await import(${JSON.stringify(path.join(project, "packages/vibestack/src/cache.ts"))});`,
+      `const { entry, steady, solver, store } = await import(${JSON.stringify(path.join(project, "packages/vibestack/src/cache.ts"))});`,
       'const memory = { root: ".", fresh: false, used: new Set() };',
       'const proof = async () => (await entry(".", "prove", ["same obligation"])).name;',
-      'const kept = async () => { await steady(() => act(memory, "dafny", ["audit", "a.dfy"], "audited", { "a.dfy": { text: "", key: "a" } })); return fs.existsSync(".spec-cache") ? fs.readdirSync(".spec-cache").filter((f) => f.startsWith("action-")).length : 0; };',
-      'const within = await steady(async () => { const before = await proof(); fs.writeFileSync("audit/Support.dll", "installed again during the check"); return [before, await proof()]; });',
+      'const outcome = (work) => steady(work).then(() => "certified", (error) => error.message);',
+      'const audit = () => act(memory, "dafny", ["audit", "a.dfy"], "audited", { "a.dfy": { text: "", key: "a" } });',
+      'const kept = async () => { const result = await outcome(audit); return [result, fs.existsSync(".spec-cache") ? fs.readdirSync(".spec-cache").filter((f) => f.startsWith("action-")).length : 0]; };',
+      'let within; const changedDuring = await outcome(async () => { const before = await proof(); fs.writeFileSync("audit/Support.dll", "installed again during the check"); within = [before, await proof()]; });',
       'const after = await proof();',
       'process.env.REWRITE = "1";',
       'const rewritten = await kept();',
       'delete process.env.REWRITE;',
       'const keptAfter = await kept();',
+      'const restored = await outcome(async () => { await audit(); const file = "audit/z3"; const original = fs.readFileSync(file); fs.appendFileSync(file, " "); fs.writeFileSync(file, original); });',
+      'const warm = await outcome(async () => { await audit(); fs.appendFileSync("audit/Support.dll", " changed after a warm hit"); });',
+      'const published = await steady(async () => { await proof(); const entries = await Promise.all(Array.from({length: 64}, (_, i) => entry(".", "action", ["batch", String(i)]))); for (const e of entries) store(memory, e, "verified", "dafny"); return entries.filter(e => fs.existsSync(e.file)).length; });',
       'const choose = () => steady(async () => [(await solver()).version, await proof()]);',
       'const bundled = "libexec/z3/bin/z3-4.12.1"; fs.mkdirSync("libexec/z3/bin", { recursive: true });',
       'const install = (v) => { fs.writeFileSync(bundled + ".next", ["#!/bin/sh", "echo Z3 version " + v, ""].join(String.fromCharCode(10)), { mode: 0o755 }); fs.renameSync(bundled + ".next", bundled); };',
       'const fallback = await choose(); install("4.12.0"); const preferred = await choose(); install("4.12.2"); const replaced = await choose(); fs.unlinkSync(bundled);',
-      'console.log(JSON.stringify({ within, after, kept: [rewritten, keptAfter], selected: [fallback, preferred, replaced, await choose()] }));',
+      'console.log(JSON.stringify({ within, after, changedDuring, restored, warm, published, kept: [rewritten, keptAfter], selected: [fallback, preferred, replaced, await choose()] }));',
     ].join("\n")], root, { ...process.env, XDG_CACHE_HOME: path.join(root, "cache"), PATH: `${audit}${path.delimiter}${process.env.PATH ?? ""}` });
     assert.equal(checked.status, 0, checked.stderr);
     const steadily = JSON.parse(checked.stdout);
     assert.equal(steadily.within[1], steadily.within[0], "a check reads Dafny's installation once");
     assert.notEqual(steadily.after, steadily.within[0], "and the next reads it again");
-    assert.deepEqual(steadily.kept, [0, 1], "a run of Dafny during which it was installed again is not remembered, though its check read the installation before");
+    assert.equal(steadily.published, 64, "certified native actions are published in bounded batches");
+    for (const changed of [steadily.changedDuring, steadily.restored, steadily.warm]) assert.match(changed, /tool installation changed/);
+    assert.deepEqual(steadily.kept, [["a tool installation changed during this check; run the check again", 0], ["certified", 1]], "a run of Dafny during which it was installed again is not remembered, though its check read the installation before");
     const selected: [string, string][] = steadily.selected;
     assert.deepEqual(selected.map(([version]) => version), ["4.12.1", "4.12.0", "4.12.2", "4.12.1"], "a preferred bundled solver is discovered, updated, and removed between checks");
     assert.equal(new Set(selected.map(([, proof]) => proof)).size, 3, "each installed solver has its own proof identity");
@@ -4010,7 +4047,30 @@ export function useShown(counter: ManagedRuntime.ManagedRuntime<Machine, never>,
     // Nothing stored starts from `initial`, and a stored state goes on from where it was; what the rules refuse, or what is no state, leaves the store as it is; a machine steps from what another over the same store stored since, and its guard is judged by it.
     const kept = await exec(process.execPath, ["--import", "vibelang/register", "--input-type=module", "-e", `import assert from "node:assert/strict"; import { Effect } from "effect"; import { counted, twoPages } from "./src/kept.vibe";
 assert.deepEqual(await Promise.all([undefined, "1", "2", "7", "{"].map((before) => Effect.runPromise(counted(before)))), [[1, "1"], [2, "2"], ["Rejected", "2"], ["NotAState", "7"], ["NotAState", "{"]]);
-assert.deepEqual(await Effect.runPromise(twoPages()), [1, 2, "Rejected", "2"]);`], root);
+assert.deepEqual(await Effect.runPromise(twoPages()), [1, 2, "Rejected", "2"]);
+const { machineOver } = await import("./gen/index.effect.vibe");
+const { Deferred, Fiber, Ref } = await import("effect");
+const outcome = await Effect.runPromise(Effect.gen(function*() {
+  const kept = yield* Ref.make(0);
+  const firstSaving = yield* Deferred.make();
+  const resume = yield* Deferred.make();
+  const machine = yield* machineOver(() => Ref.get(kept), (n) => Effect.gen(function*() {
+    if (n === 1) {
+      yield* Deferred.succeed(firstSaving, undefined);
+      yield* Deferred.await(resume);
+    }
+    yield* Ref.set(kept, n);
+  }));
+  const first = yield* Effect.forkChild(machine.send({ type: "inc" }));
+  yield* Deferred.await(firstSaving);
+  let source = "first";
+  const pending = yield* Effect.forkChild(Effect.flip(machine.send({ type: "inc" }, () => source === "first")), { startImmediately: true });
+  source = "replacement";
+  yield* Deferred.succeed(resume, undefined);
+  yield* Fiber.join(first);
+  return [(yield* Fiber.join(pending))._tag, yield* machine.get(), yield* machine.send({ type: "inc" }, (current) => current === 1)];
+}));
+assert.deepEqual(outcome, ["Rejected", 1, 2]);`], root);
     assert.equal(kept.status, 0, kept.stdout + kept.stderr);
     // An owner's package.json decides for its own gen/, whatever the root's says.
     const tree = scratch({ "spec/index.md": "# Product\n", "spec/app/index.md": ruleSpec(COUNTER), "spec/plain/index.md": ruleSpec(COUNTER), "apps/app/package.json": manifest("@scratch/app"), "apps/plain/package.json": "{}" });
@@ -4632,12 +4692,18 @@ test("the lint refuses, in a project's own code, a comment that is neither a cit
   const eslint = new ESLint({ cwd: project });
   const found = async (file: string, lines: string[]) => (await eslint.lintText(lines.join("\n"), { filePath: path.join(project, file) }))[0]!.messages
     .filter((m) => m.fatal || m.ruleId === "no-console" || m.ruleId?.startsWith("code/")).map((m) => `${m.line} ${m.ruleId ?? "inline config"}`);
-  const specFile = "spec/app/index.md";
+  const specRoot = fs.existsSync(path.join(project, "template/spec")) ? path.join(project, "template") : project;
+  const spec = readSpecs(specRoot).find((s) => s.file.startsWith("spec/")
+    && s.stories.some((story) => !story.title.includes('"'))
+    && s.rules.some((rule) => !heading(rule).includes('"')));
+  const specFile = spec?.file ?? "spec/app/index.md";
+  const storyHeading = spec?.stories.find((story) => !story.title.includes('"'))?.title ?? "Story: Say hello";
+  const ruleHeading = spec ? heading(spec.rules.find((rule) => !heading(rule).includes('"'))!) : "The number of greetings is never negative";
   assert.deepEqual(await found("template/apps/app/src/probe.vibe", [
-    `// ${specFile}, "Story: Say hello"; ${specFile}, "The number of greetings is never negative"`,
-    `/* ${specFile}, "Story: Say hello" */`,
+    `// ${specFile}, "${storyHeading}"; ${specFile}, "${ruleHeading}"`,
+    `/* ${specFile}, "${storyHeading}" */`,
     "//@ ghost",
-    "/** @model spec/app/index.md */",
+    `/** @model ${specFile} */`,
     "/** @throws {never} */",
     "// a note",
     "/** What it is. */",

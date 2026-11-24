@@ -212,7 +212,7 @@ async function precomputedSimulations(root: string, specs: Spec[], targets: read
           started.set(spec.name, result);
         }
         const simulations = await allDone([...requested].map((name) => started.get(name)).filter((result) => result !== undefined));
-        await certifyInstallation();
+        certifyInstallation();
         const results = simulations.flatMap(({ said }) => said);
         if (!receipts || (started.size && evaluatorForCheck(root) !== evaluatorIdentity(root))) return { results };
         const complete = receipts.typechecks.size === selected.size && receipts.simulations.size === started.size && results.every((row) => row.ok);
@@ -624,7 +624,7 @@ async function checkLocked(root: string, accept: false | "reviews" | "unproved",
   }
 
   confirmReported();
-  await certifyInstallation();
+  certifyInstallation();
 
   // A spec that is not a valid model has nothing to reconcile yet. Everything is recorded at once, or nothing is.
   const reviewed = observe?.("review");

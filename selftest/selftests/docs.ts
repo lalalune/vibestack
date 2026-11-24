@@ -23,6 +23,16 @@ describe("the documents name what exists", () => {
   const manifest = (dir: string): Record<string, Record<string, string> | undefined> => JSON.parse(read(path.join(dir, "package.json")));
   const within = (dir: string) => fs.existsSync(path.join(project, dir)) ? fs.readdirSync(path.join(project, dir), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => `${dir}/${e.name}`) : [];
 
+  const trackedEntries = async () => {
+    const listed = await exec("git", ["ls-files", "--stage", "-z"], project);
+    assert.equal(listed.status, 0, listed.stderr);
+    return listed.stdout.split("\0").filter(Boolean).map((entry) => {
+      const tab = entry.indexOf("\t");
+      const [mode, object] = entry.slice(0, tab).split(" ");
+      return { mode, object, file: entry.slice(tab + 1) };
+    });
+  };
+
   test("every repository path, pnpm script and link in the documents and skills leads somewhere", () => {
     const workspace = ["packages", "template/packages", "template/apps"].flatMap(within).filter((dir) => fs.existsSync(path.join(project, dir, "package.json")));
     // What pnpm itself provides, and what a document proposes rather than names.
@@ -84,24 +94,26 @@ describe("the documents name what exists", () => {
     const plan: { globalCacheInputs: { files: Record<string, string> }; tasks: { taskId: string; inputs: Record<string, string> }[] } = JSON.parse(dry.stdout);
     const global = Object.keys(plan.globalCacheInputs.files);
     const [docs, examples, ...tools] = ["selftest:docs", "selftest:examples", ...shards].map((task) => new Set([...global, ...Object.keys(plan.tasks.find((t) => t.taskId === `//#${task}`)!.inputs)]));
-    const tracked = (await exec("git", ["ls-files"], project)).stdout.trim().split("\n").filter((file) => fs.lstatSync(path.join(project, file)).isFile());
+    const tracked = (await trackedEntries()).filter(({ mode, file }) =>
+      mode !== "160000" && fs.lstatSync(path.join(project, file), { throwIfNoEntry: false })?.isFile()).map(({ file }) => file);
     const missed = (hashed: Set<string>, read: (file: string) => boolean) => tracked.filter((file) => read(file) && !hashed.has(file));
-    const workspace = (file: string) => /^(template\/|packages\/create-vibestack\/)/.test(file);
+    const workspace = (file: string) => /^(template\/|packages\/create-vibestack\/|apps\/)/.test(file);
     const [shardA, shardB, packed] = tools;
     const toolInput = (file: string) => ![docsSource, examplesSource].includes(file)
-      && (PACKED.includes(file) || /^(packages\/vibestack\/|packages\/studio\/|selftest\/|examples\/order\/|\.agents\/skills\/)/.test(file));
+      && ((!workspace(file) && PACKED.includes(file)) || /^(packages\/vibestack\/|packages\/studio\/|selftest\/|examples\/order\/|\.agents\/skills\/)/.test(file));
     assert.deepEqual({
       docs: missed(docs, () => true),
       examples: missed(examples, (file) => ![toolSource, docsSource, toolMetadata].includes(file) && /^(examples\/|packages\/vibestack\/(?!src\/(testing|stories|design)\/test\/))/.test(file)),
       tools: tools.flatMap((hashed) => missed(hashed, (file) => toolInput(file) && (hashed === packed || file !== "README.md"))),
-      packed: missed(packed, (file) => file === ".gitignore" || workspace(file)),
+      packed: missed(packed, (file) => file === ".gitignore" || PACKED.includes(file) || /^(template\/|packages\/create-vibestack\/)/.test(file)),
+      unstagedAppFiles: [...packed].filter((file) => file.startsWith("apps/") && !PACKED.includes(file)),
       readmeInFixtures: [shardA, shardB].some((hashed) => hashed.has("README.md")),
       workspaceInFixtures: [shardA, shardB].flatMap((hashed) => [...hashed].filter(workspace)),
       examplesInTools: tools.flatMap((hashed) => [...hashed]).filter((file) => /^examples\/(?!order\/)/.test(file)),
       selftestInGlobal: global.filter((file) => /^(selftest\/|packages\/vibestack\/src\/remote-cache\.ts$)|\/test\//.test(file)),
       independentSourcesInTools: tools.flatMap((hashed) => [docsSource, examplesSource].filter((file) => hashed.has(file))),
       independentSourcesInExamples: [toolSource, docsSource, toolMetadata].filter((file) => examples.has(file)),
-    }, { docs: [], examples: [], tools: [], packed: [], readmeInFixtures: false, workspaceInFixtures: [], examplesInTools: [], selftestInGlobal: [], independentSourcesInTools: [], independentSourcesInExamples: [] });
+    }, { docs: [], examples: [], tools: [], packed: [], unstagedAppFiles: [], readmeInFixtures: false, workspaceInFixtures: [], examplesInTools: [], selftestInGlobal: [], independentSourcesInTools: [], independentSourcesInExamples: [] });
     assert.deepEqual([shards, listed("selftest").sort(), listed("verify").filter((task) => task.includes("selftest")).sort()],
       [["selftest:tools:a", "selftest:tools:b", "selftest:tools:rest"], selftests.map((task) => `//#${task}`), selftests.map((task) => `//#${task}`)], "pnpm selftest and pnpm verify run every selftest task");
     const each = "the tools each check catches its own kind of mistake";
@@ -156,12 +168,19 @@ describe("the documents name what exists", () => {
     fs.mkdirSync(path.join(root, "template/packages/kit"), { recursive: true });
     fs.writeFileSync(path.join(root, "template/spec/kit/index.md"), "# Kit\n");
     fs.writeFileSync(path.join(root, "template/packages/kit/package.json"), JSON.stringify({ name: "@repo/kit", scripts }));
-    for (const file of (await exec("git", ["ls-files"], project)).stdout.trim().split("\n")) {
-      if (fs.lstatSync(path.join(project, file)).isDirectory()) continue;
-      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-      fs.cpSync(path.join(project, file), path.join(root, file), { verbatimSymlinks: true });
+    const initialized = await exec("git", ["init", "-q"], root);
+    assert.equal(initialized.status, 0, initialized.stderr);
+    for (const { mode, object, file } of await trackedEntries()) {
+      const destination = path.join(root, file);
+      if (mode === "160000") {
+        fs.mkdirSync(destination, { recursive: true });
+        const indexed = await exec("git", ["update-index", "--add", "--cacheinfo", mode, object, file], root);
+        assert.equal(indexed.status, 0, indexed.stderr);
+      } else if (fs.lstatSync(path.join(project, file), { throwIfNoEntry: false })) {
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.cpSync(path.join(project, file), destination, { verbatimSymlinks: true });
+      }
     }
-    await exec("git", ["init", "-q"], root);
     const staged = await exec("git", ["add", "-A"], root);
     assert.equal(staged.status, 0, staged.stderr);
     const evaluatorHome = path.join(root, "custom quint home");
@@ -190,9 +209,11 @@ describe("the documents name what exists", () => {
     };
     const studio = (ids: string[]) => ids.filter((id) => /^(vibestack-studio#(?!check)|@repo\/(ui#(build|typecheck)|design-system#build)|\/\/#lint:css)/.test(id));
     const append = (file: string, text = "\nMore words.\n") => () => fs.appendFileSync(path.join(root, file), text);
-    const vibeDeclared = ["template/apps/app", "template/packages/ui", "packages/studio"].filter((dir) => read(`${dir}/tsconfig.json`, root).includes(".vibe/declarations")).map((dir) => `${JSON.parse(read(`${dir}/package.json`, root)).name}#typecheck`);
+    const vibeDeclared = ["packages", "apps", "template/packages", "template/apps"].flatMap(within)
+      .filter((dir) => fs.existsSync(path.join(root, dir, "tsconfig.json")) && read(`${dir}/tsconfig.json`, root).includes(".vibe/declarations"))
+      .map((dir) => `${JSON.parse(read(`${dir}/package.json`, root)).name}#typecheck`);
     const [prose, selftest, fixture, frameworkTest] = [
-      await changedBy(append("template/spec/app/index.md")),
+      await changedBy(append("template/spec/kit/index.md")),
       await changedBy(append(toolSource, "\n")),
       await changedBy(append("selftest/fixtures/door.md")),
       await changedBy(append("packages/vibestack/src/design/test/design.test.ts", "\n")),
@@ -225,7 +246,7 @@ describe("the documents name what exists", () => {
       analyzeWaitsFor: tasks.get("//#analyze")!.dependencies.toSorted(),
       lintWaitsFor: vibeDeclared.filter((id) => tasks.get("//#lint:js")!.dependencies.includes(id)),
       devWaitsFor: tasks.get("vibestack-studio#dev")!.dependencies.toSorted(),
-      prose: [studio(prose), prose.includes("@repo/app#test"), prose.includes("//#analyze")],
+      prose: [studio(prose), prose.includes("@repo/kit#test"), prose.includes("//#analyze")],
       readme: [selftests(readme), readme.includes("//#analyze")],
       selftest: [studio(selftest), selftest.includes("vibestack#build"), ["a", "b", "rest"].every((shard) => selftest.includes(`//#selftest:tools:${shard}`))],
       fixture: { studio: studio(fixture), build: fixture.includes("vibestack#build"), selftest: fixture.includes("//#selftest:tools:a") },
@@ -243,7 +264,7 @@ describe("the documents name what exists", () => {
     }, {
       notWaiting: [
         "//#lint:css", "//#selftest:docs", "//#selftest:examples", "//#selftest:tools:a", "//#selftest:tools:b", "//#selftest:tools:rest",
-        "@repo/design-system#build", "@repo/ui#typecheck",
+        "@repo/design-system#build", "@repo/site#build", "@repo/site#typecheck", "@repo/ui#typecheck",
         "create-vibestack#build", "create-vibestack#test", "create-vibestack#typecheck",
         "vibestack#build", "vibestack#test", "vibestack#typecheck",
         "vibestack-studio#build", "vibestack-studio#dev", "vibestack-studio#test", "vibestack-studio#typecheck",

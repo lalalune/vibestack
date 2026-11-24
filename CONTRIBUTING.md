@@ -104,7 +104,7 @@ one thing at a time and asserts which stage catches each. It runs as five cached
 read: `selftest:docs` the documents against every file they can name, `selftest:examples` each standalone example
 against its own files and the tools. `selftest:tools:a` and `selftest:tools:b` build scratch projects from the order
 example and fixtures. `selftest:tools:rest` also packs and tests the published packages (`vibestack`, `vibestack-studio`,
-`create-vibestack`), so changes under `template/` or `packages/` invalidate its isolated CI run. The first two each run one shard of the kinds of mistake, the
+`create-vibestack`), so app manifest changes and changes under `template/` or `packages/` invalidate its isolated CI run. The first two each run one shard of the kinds of mistake, the
 `describe` named `in shard a` or `in shard b` in `selftest/selftest.ts`. The third runs the remaining tool tests there.
 Changes to either docs or standalone example test code keep the tool shards cached. Keep the longest tests spread over the three.
 Changes to the root README rerun the docs and packaged tool checks.

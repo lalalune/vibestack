@@ -45,10 +45,20 @@ const packageVersion = (dep: string) => {
 
 const hashFileBytes = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
-const treeFiles = (directory: string) => fs.readdirSync(directory, { recursive: true, withFileTypes: true })
-  .filter((entry) => entry.isFile() || (entry.isSymbolicLink() && fs.statSync(path.join(entry.parentPath, entry.name)).isFile()))
-  .map((entry) => path.relative(directory, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"))
-  .sort();
+function treeFiles(directory: string, layout?: Map<string, string>): string[] {
+  if (layout) {
+    const real = fs.realpathSync(directory);
+    layout.set(directory, fileStamp(directory, false));
+    if (real !== directory) layout.set(real, fileStamp(real, false));
+  }
+  return fs.readdirSync(directory, { recursive: true, withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(entry.parentPath, entry.name);
+    if (entry.isDirectory() || entry.isSymbolicLink()) layout?.set(file, fileStamp(file, false));
+    const linked = entry.isSymbolicLink() && fs.statSync(file, { bigint: true });
+    if (linked && linked.isDirectory()) layout?.set(fs.realpathSync(file), formatStamp(linked));
+    return entry.isFile() || (linked && linked.isFile()) ? [path.relative(directory, file).split(path.sep).join("/")] : [];
+  }).sort();
+}
 /** Runtime files are keyed by relative name and bytes, never their installation directory. */
 const treeDigest = (directory: string, files = treeFiles(directory), stamps?: ReadonlyMap<string, string>) =>
   sha(...files.map((file) => {
@@ -61,22 +71,26 @@ function dafnyInstallation() {
   const launcher = findDafny();
   if (!launcher) throw new Error("Dafny is not on PATH or in ~/.cache/vibestack/dafny/4.11; the task cache needs its toolchain fingerprint");
   const real = fs.realpathSync(launcher);
-  const assemblies = [path.dirname(real), path.resolve(path.dirname(real), "../libexec")]
-    .find((dir) => fs.existsSync(path.join(dir, "Dafny.dll")));
+  const locations = [path.dirname(real), path.resolve(path.dirname(real), "../libexec")];
+  const selectedFiles = [launcher, ...locations.map((dir) => path.join(dir, "Dafny.dll"))];
+  const assemblies = locations.find((dir) => fs.existsSync(path.join(dir, "Dafny.dll")));
   if (!assemblies) throw new Error("Dafny.dll is not beside Dafny or in ../libexec; the task cache cannot fingerprint this installation");
   const launchers = [real];
   for (;;) {
     const bytes = fs.readFileSync(launchers[launchers.length - 1]);
     const next = bytes.subarray(0, 2).toString() === "#!" ? bytes.toString().match(/\bexec\s+"([^"\n]*[\\/]dotnet(?:\.exe)?)"/)?.[1] : undefined;
     if (!next) break;
+    selectedFiles.push(next);
     launchers.push(fs.realpathSync(next));
     fs.accessSync(launchers[launchers.length - 1], fs.constants.X_OK);
     if (launchers.length > 5) throw new Error("Dafny's runtime launcher chain does not terminate");
   }
-  const runtime = ["host", "shared"].map((dir) => path.join(path.dirname(launchers[launchers.length - 1]), dir)).filter((dir) => fs.existsSync(dir));
+  const runtimeDirs = ["host", "shared"].map((dir) => path.join(path.dirname(launchers[launchers.length - 1]), dir));
+  selectedFiles.push(...runtimeDirs);
+  const runtime = runtimeDirs.filter((dir) => fs.existsSync(dir));
   if (!runtime.length && !fs.existsSync(path.join(assemblies, "System.Private.CoreLib.dll")))
     throw new Error("Dafny's external .NET runtime cannot be fingerprinted; use a self-contained release or an explicit dotnet launcher");
-  return { launchers, assemblies, runtime };
+  return { launcher, launchers, assemblies, runtime, selectedFiles };
 }
 
 interface DafnyInstall {
@@ -87,6 +101,7 @@ interface DafnyInstall {
   files: string[];
   stamps: Map<string, string>;
   at: string;
+  unchanged: () => boolean;
 }
 
 const dafnySaid = (version: string | undefined, stopped?: string, out = "") => {
@@ -105,7 +120,8 @@ type Check = {
   pending: Map<string, Buffer>;
   pendingDafny: Map<string, Buffer>;
   verify: Set<Program>;
-  verifyDafny?: string;
+  solverAt?: string;
+  dafnyBytes: number;
   touched: Set<string>;
   bytes: number;
   lastPublished: number;
@@ -120,6 +136,10 @@ const MAX_PENDING_ENTRIES = 64;
 const MAX_PENDING_BYTES = 32 * 1024 ** 2;
 const PUBLISH_INTERVAL_MS = 15_000;
 
+function pendingLimit(check: Check) {
+  return check.pending.size + check.pendingDafny.size >= MAX_PENDING_ENTRIES || check.bytes + check.dafnyBytes >= MAX_PENDING_BYTES;
+}
+
 function includePrograms(check: Check) {
   for (const program of check.programs.values()) if (program?.id) check.verify.add(program);
 }
@@ -128,7 +148,7 @@ function resetPending(check: Check) {
   check.pending.clear();
   check.pendingDafny.clear();
   check.verify.clear();
-  check.verifyDafny = undefined;
+  check.dafnyBytes = 0;
   check.bytes = 0;
 }
 
@@ -152,42 +172,49 @@ function publishChecked() {
   check.lastPublished = performance.now();
 }
 
-async function flushVerified(check: Check, complete: boolean) {
-  if (!verifyPrograms(check, complete)) return;
-  if (check.verifyDafny !== undefined) {
-    const current = await verifiedNow().catch(() => undefined);
-    if (current !== check.verifyDafny || check.changed) {
-      check.changed = true;
-      resetPending(check);
-      return;
-    }
+function publishDafny(check: Check) {
+  if (!verifyPrograms(check, true)) return;
+  const installed = check.installation;
+  if ((installed && (installed.files ? !installed.unchanged() : checking.exit(installation).at !== installed.at))
+    || (check.solverAt !== undefined && solverStamp(solverCandidates()) !== check.solverAt)) {
+    check.changed = true;
+    resetPending(check);
+    throw new InstallationChanged();
   }
-  if (check.pending.size || check.pendingDafny.size) {
-    for (const [file, bytes] of check.pending) writeWhole(file, bytes);
-    for (const [file, bytes] of check.pendingDafny) writeWhole(file, bytes);
-    check.lastPublished = performance.now();
-  }
-  resetPending(check);
+  for (const [file, bytes] of check.pendingDafny) writeWhole(file, bytes);
+  check.pendingDafny.clear();
+  check.dafnyBytes = 0;
 }
 
-export async function certifyInstallation() {
+export function certifyInstallation() {
   const check = checking.getStore();
   if (!check) return;
-  await flushVerified(check, true);
+  publishDafny(check);
   if (check.changed) throw new InstallationChanged();
+  for (const [file, bytes] of check.pending) writeWhole(file, bytes);
+  resetPending(check);
   check.certified = true;
 }
 
 function installation(): DafnyInstall | { at: string; files?: undefined } {
   const now = (): DafnyInstall | { at: string; files?: undefined } => {
     try {
-      const { launchers, assemblies, runtime } = dafnyInstallation();
-      const trees = new Map<string, string[]>([assemblies, ...runtime].map((dir) => [dir, treeFiles(dir)]));
+      const { launcher, launchers, assemblies, runtime, selectedFiles } = dafnyInstallation();
+      const layout = new Map<string, string>();
+      for (const file of selectedFiles) {
+        layout.set(file, fileStamp(file, false));
+        for (let dir = path.dirname(file); dir !== path.dirname(dir); dir = path.dirname(dir)) {
+          const stat = fs.lstatSync(dir, { bigint: true, throwIfNoEntry: false });
+          if (stat?.isSymbolicLink()) layout.set(dir, formatStamp(stat));
+        }
+      }
+      const trees = new Map<string, string[]>([assemblies, ...runtime].map((dir) => [dir, treeFiles(dir, layout)]));
       const files = [...launchers, ...[...trees.entries()].flatMap(([dir, entries]) => entries.map((f) => path.join(dir, f)))];
       const stamps = new Map<string, string>();
       try {
         for (const file of files) stamps.set(file, formatStamp(fs.statSync(file, { bigint: true })));
-        return { launchers, assemblies, runtime, trees, files, stamps, at: files.map((file) => `${file}=${stamps.get(file)}`).join("\0") };
+        return { launchers, assemblies, runtime, trees, files, stamps, at: JSON.stringify([...layout, ...stamps]),
+          unchanged: () => findDafny() === launcher && sameFiles(stamps, layout) };
       } catch (e) {
         return { at: (e as Error).message };
       }
@@ -198,13 +225,13 @@ function installation(): DafnyInstall | { at: string; files?: undefined } {
   const scope = checking.getStore();
   return scope ? (scope.installation ??= now()) : now();
 }
-/** Run a check, which reads Dafny's installation once: a reinstall during it is seen by the next check, and by `verifiedNow`. */
+/** Run a check, which reads Dafny's installation once: its final certification checks that installation even after a wholly warm run. */
 export const steady = <T>(run: () => Promise<T>) => {
-  const check: Check = { programs: new Map(), evaluators: new Map(), pending: new Map(), pendingDafny: new Map(), verify: new Set(), touched: new Set(), bytes: 0, lastPublished: -Infinity };
+  const check: Check = { programs: new Map(), evaluators: new Map(), pending: new Map(), pendingDafny: new Map(), verify: new Set(), touched: new Set(), bytes: 0, dafnyBytes: 0, lastPublished: -Infinity };
   return checking.run(check, async () => {
     try {
       const result = await run();
-      if (!check.certified) await flushVerified(check, true);
+      if (!check.certified) certifyInstallation();
       return result;
     } finally {
       check.closed = true;
@@ -713,8 +740,7 @@ async function readDafnyVersion(inst: DafnyInstall | undefined): Promise<{ versi
   try {
     const installed = inst && lasting(`dafny --version ${inst.files[0]}`, inst.files, inst.files.map((f) => inst.stamps.get(f)!).join(" "));
     if (installed?.value) return dafnySaid(installed.value);
-    const dafnyExe = findDafny() ?? "dafny";
-    const r = await exec(dafnyExe, ["--version"], process.cwd());
+    const r = await exec(inst?.launchers[0] ?? findDafny() ?? "dafny", ["--version"], process.cwd());
     const version = r.status === 0 ? r.stdout.match(/\d+\.\d+\.\d+/)?.[0] : undefined;
     if (version && !r.stopped) installed?.keep(version);
     return dafnySaid(version, r.stopped, `${r.stdout}${r.stderr}`);
@@ -742,8 +768,10 @@ export const verifierIdentity = perCheck(async () => {
   const [dafny, z3] = await Promise.all([dafnyIdentity(), solver()]);
   return JSON.stringify({ dafny, z3: `${z3.version}:${executableDigest(z3.path)}`, platform: `${process.platform}:${process.arch}` });
 });
-/** The verifier as installed now, even within a check: whether it was installed again while a tool ran. */
-export const verifiedNow = () => checking.exit(verifierIdentity);
+export function dafnyLauncher() {
+  const now = installation();
+  return now.files ? now.launchers[0] : (findDafny() ?? "dafny");
+}
 
 class SolverUnavailable extends Error {}
 
@@ -751,7 +779,7 @@ class SolverUnavailable extends Error {}
  * The solver selected by Dafny's installation, pinned for every proof and recorded in its cache key; selected again once
  * per check from the bundled candidates and Z3 on the PATH. A candidate's version is asked of it only once it changed.
  */
-export const solver = perCheck(async () => {
+function solverCandidates(): string[] {
   const dafny = findDafny();
   const z3 = onPath("z3");
   const candidates: string[] = [];
@@ -766,6 +794,14 @@ export const solver = perCheck(async () => {
     }
   }
   if (z3) candidates.push(z3);
+  return candidates;
+}
+const solverStamp = (candidates: string[]) => JSON.stringify(candidates.map((file) => [file, fileStamp(file), fileStamp(file, false)]));
+
+export const solver = perCheck(async () => {
+  const candidates = solverCandidates();
+  const check = checking.getStore();
+  if (check) check.solverAt = solverStamp(candidates);
   for (const candidate of candidates) {
     try {
       const real = fs.realpathSync(candidate);
@@ -998,56 +1034,37 @@ function readReceipt<T>(memory: Memory, { name, file }: Entry): T | undefined {
   return undefined;
 }
 /** Remember `value` under an entry, unless this process cannot say which tools computed it: then the next check computes it again. */
-export function store(memory: Memory, raw: Entry, value: unknown, source?: { program: Program; began: number } | { dafny: string }) {
+export function store(memory: Memory, raw: Entry, value: unknown, source?: { program: Program; began: number } | "dafny") {
   const { evaluator, reusable } = raw;
   const projected = projectedEntry(memory, raw);
   if (!projected) memory.used.add(raw.name);
   const check = checking.getStore();
   if (unsure || check?.changed || check?.closed || !reusable) return;
   if (evaluator !== undefined && !stableInstallation(evaluatorIdentity(memory.root) === evaluator)) return;
-  const action = source && "program" in source ? source : undefined;
-  const dafnyId = source && "dafny" in source ? source.dafny : undefined;
+  const action = source === "dafny" ? undefined : source;
   if (action && !check && !action.program.unchanged()) return;
   const compact = projected && memory.actionProjection?.encode(value);
   const { name, file } = projected && compact !== undefined ? projected : raw;
   const bytes = zstdCompressSync(JSON.stringify(compact === undefined ? value : compact));
   memory.used.add(name);
   sharedCache(name)?.used.add(name);
-  if (dafnyId !== undefined && check) {
-    if (check.verifyDafny !== undefined && check.verifyDafny !== dafnyId) {
-      check.changed = true;
-      check.pending.clear();
-      check.pendingDafny.clear();
-      check.verifyDafny = undefined;
-      return;
-    }
-    check.verifyDafny = dafnyId;
+  if (check && (source === "dafny" || /^(?:prove|tests|traces|explore)-/.test(raw.name))) {
+    check.dafnyBytes += bytes.length - (check.pendingDafny.get(file)?.length ?? 0);
     check.pendingDafny.set(file, bytes);
+    if (pendingLimit(check)) publishDafny(check);
     memory.captureReceipt?.({ name, bytes });
     return;
   }
   if (action) check?.verify.add(action.program);
-  else if (check) {
-    if (raw.name.startsWith("simulate-")) {
-      const quint = check.programs.get(`quint\0${path.resolve(memory.root)}`);
-      if (quint?.id) check.verify.add(quint);
-    } else if (raw.name.startsWith("prove-")) {
-      const lsc = check.programs.get(`lsc\0${path.resolve(memory.root)}`);
-      if (lsc?.id) check.verify.add(lsc);
-      if (check.verifyDafny !== undefined) {
-        check.pendingDafny.set(file, bytes);
-        memory.captureReceipt?.({ name, bytes });
-        return;
-      }
-    } else if (!raw.name.startsWith("types-")) {
-      includePrograms(check);
-    }
+  else if (check && raw.name.startsWith("simulate-")) {
+    const quint = check.programs.get(`quint\0${path.resolve(memory.root)}`);
+    if (quint?.id) check.verify.add(quint);
   }
   if (!check?.verify.size) writeWhole(file, bytes);
   else {
     check.bytes += bytes.length - (check.pending.get(file)?.length ?? 0);
     check.pending.set(file, bytes);
-    if (!action || check.pending.size >= MAX_PENDING_ENTRIES || check.bytes >= MAX_PENDING_BYTES
+    if (!action || pendingLimit(check)
       || performance.now() - Math.min(check.lastPublished, action.began) >= PUBLISH_INTERVAL_MS) publishChecked();
   }
   memory.captureReceipt?.({ name, bytes });
