@@ -76,12 +76,23 @@ const moduleOf = (spec: string) => spec.replace(/^(\.\/)?spec\//, "").replace(/\
  * The generated module of `spec`: in the component's own package, or, for a shared package such as a component
  * library, in the spec's owner, else the root's (SPEC.md, "One spec tree").
  */
-export const modelFile = (abs: string, spec: string): string | undefined => {
+export const modelFile = (abs: string, spec: string, observe?: (file: string) => void): string | undefined => {
   const own = packageOf(dirname(abs)).dir, name = `${moduleOf(spec)}.ts`;
-  const root = ancestors(own).find((dir) => existsSync(join(dir, spec)));
-  const dir = root && owner(root, spec.replace(/^\.\//, ""));
+  const parents = ancestors(own);
+  const root = parents.find((dir) => existsSync(join(dir, spec)));
+  if (observe) {
+    const boundary = root ?? parents.findLast((dir) => existsSync(join(dir, "package.json"))) ?? own;
+    for (const parent of parents) {
+      observe(join(parent, spec));
+      if (parent === boundary) break;
+    }
+  }
+  const dir = root && owner(root, spec.replace(/^\.\//, ""), observe);
   const candidates = [join(own, "gen", name), ...(root && dir ? [join(root, dir, "gen", name)] : []), ...(root ? [join(root, "gen", name)] : [])];
-  return candidates.find(existsSync);
+  return candidates.find((file) => {
+    observe?.(file);
+    return existsSync(file);
+  });
 };
 const ancestors = (dir: string): string[] => (dirname(dir) === dir ? [dir] : [dir, ...ancestors(dirname(dir))]);
 export const modelTag = (text: string) => /@model\s+(\S+)/.exec(text)?.[1];
