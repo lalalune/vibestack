@@ -52,6 +52,25 @@ describe("create-vibestack CLI", () => {
     expect(out).toContain("pnpm dlx vibestack-studio");
   });
 
+  test("rewrites catalog vibestack refs directly into manifests for file: version specs", () => {
+    const cwd = makeTempDir();
+    execFileSync(
+      process.execPath,
+      [cliPath, "local-tarball-app", "--no-install", "--vibestack-version", "./vibestack-0.2.0.tgz"],
+      { cwd, encoding: "utf8" },
+    );
+    const target = path.join(cwd, "local-tarball-app");
+    const expectedSpec = `file:${path.join(cwd, "vibestack-0.2.0.tgz")}`;
+    const workspace = fs.readFileSync(path.join(target, "pnpm-workspace.yaml"), "utf8");
+
+    expect(workspace).not.toMatch(/^\s*vibestack:/m);
+    for (const rel of ["package.json", "apps/app/package.json", "packages/ui/package.json", "packages/design-system/package.json"]) {
+      expect(readJson(path.join(target, rel))).toMatchObject({
+        devDependencies: { vibestack: expectedSpec },
+      });
+    }
+  });
+
   test("writes vibestack.json when --mode is specified", () => {
     const cwd = makeTempDir();
     execFileSync(

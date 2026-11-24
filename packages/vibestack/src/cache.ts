@@ -815,22 +815,31 @@ export const solver = perCheck(async () => {
   }
   throw new SolverUnavailable("the proof stage needs the Z3 solver bundled with Dafny or on the PATH");
 });
+async function findVibelangBinary(): Promise<string | null> {
+  try {
+    const { findBinary } = await import("vibelang/binary");
+    return findBinary();
+  } catch {
+    return null;
+  }
+}
+
 /** The native toolchain that a Turbo task's inputs cannot read from the repository. */
 export async function toolchainFingerprint() {
   const z3 = await solver().catch((error: unknown) => {
     if (error instanceof SolverUnavailable) return null;
     throw error;
   });
-  const { findBinary } = await import("vibelang/binary");
-  const compiler = findBinary();
-  for (const executable of [process.execPath, compiler]) fs.accessSync(executable, fs.constants.X_OK);
+  const compiler = await findVibelangBinary();
+  fs.accessSync(process.execPath, fs.constants.X_OK);
+  if (compiler) fs.accessSync(compiler, fs.constants.X_OK);
   if (z3) fs.accessSync(z3.path, fs.constants.X_OK);
   return {
     platform: process.platform, arch: process.arch,
     node: { version: process.versions.node, digest: executableDigest(process.execPath) },
     dafny: findDafny() ? await dafnyIdentity() : null,
     z3: z3 && { version: z3.version, digest: executableDigest(z3.path) },
-    vibelang: { version: packageVersion("vibelang"), digest: executableDigest(compiler) },
+    vibelang: compiler ? { version: packageVersion("vibelang"), digest: executableDigest(compiler) } : null,
     packages: ["@informalsystems/quint", "lemmascript", "vibelang-runtime", "vibelang-vite", "typescript", "vitest", "effect", "@effect/platform-node", "@effect/vitest"].map(packageVersion),
   };
 }
@@ -935,8 +944,9 @@ async function toolchainId(root: string, stage: Stage): Promise<string | undefin
     if (stage === "prove") return [stage, node, code(closure("prove")), ...versions, verifier].join(" ");
     if (stage === "simulate") return [stage, ...versions, node, code(closure("simulate", "units"))].join(" ");
     const [quint, typescript, vibelang, ...rest] = versions;
-    const { findBinary } = await import("vibelang/binary");
-    return [stage, quint, node, code(stage === "explore" ? closure("explore") : [...tools.keys()]), typescript, `${vibelang}:${executableDigest(findBinary())}`, ...rest, verifier].filter(Boolean).join(" ");
+    const compiler = await findVibelangBinary();
+    const vibelangId = compiler ? `${vibelang}:${executableDigest(compiler)}` : "no vibelang";
+    return [stage, quint, node, code(stage === "explore" ? closure("explore") : [...tools.keys()]), typescript, vibelangId, ...rest, verifier].filter(Boolean).join(" ");
   })()));
   // A failed probe is not remembered: the next check probes again.
   id.catch(() => toolchains.delete(known));

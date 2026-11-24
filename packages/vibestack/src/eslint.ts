@@ -1233,11 +1233,30 @@ function asConfigArray(value: unknown): FlatConfig[] {
   return Array.isArray(value) ? value as FlatConfig[] : [value as FlatConfig]
 }
 
+function mergeSettings(
+  base: Record<string, unknown> | undefined,
+  extra: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!extra) return base
+  if (!base) return extra
+  const merged: Record<string, unknown> = { ...base }
+  for (const [key, value] of Object.entries(extra)) {
+    const existing = merged[key]
+    if (existing && typeof existing === "object" && !Array.isArray(existing) && value && typeof value === "object" && !Array.isArray(value)) {
+      merged[key] = { ...(existing as Record<string, unknown>), ...(value as Record<string, unknown>) }
+    } else {
+      merged[key] = value
+    }
+  }
+  return merged
+}
+
 function scopeEntries(entries: readonly FlatConfig[], files: string[], extra: Partial<FlatConfig> = {}): FlatConfig[] {
   return entries.map((entry) => {
-    const mergedSettings = extra.settings
-      ? { ...((entry.settings as Record<string, unknown> | undefined) ?? {}), ...(extra.settings as Record<string, unknown>) }
-      : entry.settings
+    const mergedSettings = mergeSettings(
+      entry.settings as Record<string, unknown> | undefined,
+      extra.settings as Record<string, unknown> | undefined,
+    )
     return {
       ...entry,
       ...extra,

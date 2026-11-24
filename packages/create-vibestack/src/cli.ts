@@ -301,31 +301,57 @@ async function populateTarget(source: ProjectSource, packageRoot: string, pkgVer
   await downloadExampleFromGitHub(source.name, pkgVersion, targetDir);
 }
 
+function isCatalogAllowedVersion(spec: string): boolean {
+  return !/^(?:file:|link:|workspace:|https?:|git\+|git:|github:)/i.test(spec);
+}
+
+function rewriteManifest(
+  pkgPath: string,
+  vibestackVersion: string,
+  replaceCatalog: boolean,
+  projectName?: string,
+): void {
+  if (!fs.existsSync(pkgPath)) return;
+  const parsed: unknown = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+  if (!isRecord(parsed)) return;
+  if (projectName !== undefined) {
+    parsed.name = projectName;
+  }
+  for (const field of ["dependencies", "devDependencies"] as const) {
+    const group = parsed[field];
+    if (isRecord(group) && typeof group.vibestack === "string" && (replaceCatalog || group.vibestack !== "catalog:")) {
+      group.vibestack = vibestackVersion;
+    }
+  }
+  fs.writeFileSync(pkgPath, `${JSON.stringify(parsed, null, 2)}\n`);
+}
+
 function applyProjectCustomizations(
   targetDir: string,
   projectName: string,
   vibestackVersion: string,
   mode: ProjectMode | undefined,
 ): void {
-  const pkgPath = path.join(targetDir, "package.json");
-  if (fs.existsSync(pkgPath)) {
-    const parsed: unknown = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-    if (isRecord(parsed)) {
-      parsed.name = projectName;
-      if (isRecord(parsed.devDependencies) && typeof parsed.devDependencies.vibestack === "string" && parsed.devDependencies.vibestack !== "catalog:") {
-        parsed.devDependencies.vibestack = vibestackVersion;
+  const useCatalog = isCatalogAllowedVersion(vibestackVersion);
+  rewriteManifest(path.join(targetDir, "package.json"), vibestackVersion, !useCatalog, projectName);
+
+  if (!useCatalog) {
+    for (const container of ["apps", "packages"]) {
+      const containerDir = path.join(targetDir, container);
+      if (!fs.existsSync(containerDir)) continue;
+      for (const entry of fs.readdirSync(containerDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        rewriteManifest(path.join(containerDir, entry.name, "package.json"), vibestackVersion, true);
       }
-      if (isRecord(parsed.dependencies) && typeof parsed.dependencies.vibestack === "string" && parsed.dependencies.vibestack !== "catalog:") {
-        parsed.dependencies.vibestack = vibestackVersion;
-      }
-      fs.writeFileSync(pkgPath, `${JSON.stringify(parsed, null, 2)}\n`);
     }
   }
 
   const workspacePath = path.join(targetDir, "pnpm-workspace.yaml");
   if (fs.existsSync(workspacePath)) {
     const current = fs.readFileSync(workspacePath, "utf8");
-    const updated = current.replace(/^(\s*vibestack:\s*).+$/m, `$1${formatYamlScalar(vibestackVersion)}`);
+    const updated = useCatalog
+      ? current.replace(/^(\s*vibestack:\s*).+$/m, `$1${formatYamlScalar(vibestackVersion)}`)
+      : current.replace(/^\s*vibestack:.*\r?\n/m, "");
     fs.writeFileSync(workspacePath, updated);
   }
 
