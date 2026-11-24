@@ -88,6 +88,7 @@ export interface AgentPromptOption {
 export interface AgentLauncher {
   readonly id: AgentLauncherId;
   readonly label: string;
+  readonly external: boolean;
   readonly buildUrl: (prompt: string) => string;
 }
 
@@ -167,26 +168,32 @@ export const AGENT_LAUNCHERS: readonly AgentLauncher[] = [
   {
     id: "chatgpt",
     label: "ChatGPT (Codex)",
-    buildUrl: (prompt) => `https://chatgpt.com/?q=${encodeURIComponent(prompt)}`,
+    external: false,
+    buildUrl: (prompt) => `codex://new?prompt=${encodeURIComponent(prompt)}`,
   },
   {
     id: "claude",
-    label: "Claude",
-    buildUrl: (prompt) => `https://claude.ai/new?q=${encodeURIComponent(prompt)}`,
+    label: "Claude Code",
+    external: false,
+    buildUrl: (prompt) => `claude://code/new?q=${encodeURIComponent(prompt)}`,
   },
   {
     id: "grok",
     label: "Grok Bot",
-    buildUrl: (prompt) => `https://grok.com/?q=${encodeURIComponent(prompt)}`,
+    external: false,
+    buildUrl: (prompt) => `grokbot://app/v1/prompt?text=${encodeURIComponent(prompt)}`,
   },
   {
     id: "cursor",
     label: "Cursor",
-    buildUrl: (prompt) => `https://cursor.com/link/prompt?text=${encodeURIComponent(prompt)}`,
+    external: false,
+    buildUrl: (prompt) =>
+      `cursor://anysphere.cursor-deeplink/prompt?text=${encodeURIComponent(prompt)}`,
   },
   {
     id: "muse",
     label: "Muse",
+    external: true,
     buildUrl: (prompt) => `https://www.meta.ai/?prompt=${encodeURIComponent(prompt)}`,
   },
 ];

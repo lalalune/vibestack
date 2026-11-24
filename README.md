@@ -33,7 +33,7 @@ Read https://vibestack.fun/SKILL.md and create a new project.
 [![Cursor](https://img.shields.io/badge/Cursor-18181B?style=for-the-badge)](https://cursor.com/link/prompt?text=Read%20https%3A%2F%2Fvibestack.fun%2FSKILL.md%20and%20create%20a%20new%20project.)
 [![Muse](https://img.shields.io/badge/Muse-4F46E5?style=for-the-badge)](https://www.meta.ai/?prompt=Read%20https%3A%2F%2Fvibestack.fun%2FSKILL.md%20and%20create%20a%20new%20project.)
 
-For an existing repository, paste: `Read https://vibestack.fun/SKILL.md and upgrade an existing project.`
+For desktop app deeplinks (`codex://`, `claude://`, `grokbot://`, `cursor://`) or an existing repository (`Read https://vibestack.fun/SKILL.md and upgrade an existing project.`), open [vibestack.fun](https://vibestack.fun).
 
 **Or run from the terminal** (requires Node 26+ and [pnpm](https://pnpm.io)):
 

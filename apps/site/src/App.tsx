@@ -204,35 +204,7 @@ export function App() {
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-6">
-        <section className="flex flex-col items-center pt-14 pb-20 text-center sm:pt-20 sm:pb-24">
-          <div
-            role="tablist"
-            aria-label="Project mode"
-            className="mb-8 inline-flex items-center gap-1 rounded-lg border border-border bg-card p-1 shadow-sm"
-          >
-            {AGENT_PROMPTS.map((item) => {
-              const active = item.id === activePrompt.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => selectMode(item.id)}
-                  className={cn(
-                    focusRing,
-                    "rounded-md px-4 py-1.5 text-xs font-medium transition-colors duration-fast sm:text-sm",
-                    active
-                      ? "bg-foreground text-background shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-
+        <section className="flex flex-col items-center pt-16 pb-20 text-center sm:pt-24 sm:pb-24">
           <h1 className="text-4xl font-bold tracking-tight text-foreground sm:text-5xl lg:text-6xl">
             Ship apps. Not slop.
           </h1>
@@ -243,10 +215,38 @@ export function App() {
             What you want is what you get.
           </p>
 
-          <div className="mt-10 flex w-full max-w-3xl flex-col items-center gap-4">
+          <div className="mt-12 flex w-full max-w-3xl flex-col items-center gap-4">
             <span className="text-sm font-medium text-muted-foreground">
               Paste into your agent.
             </span>
+
+            <div
+              role="tablist"
+              aria-label="Project mode"
+              className="inline-flex items-center gap-1 rounded-lg border border-border bg-card p-1 shadow-sm"
+            >
+              {AGENT_PROMPTS.map((item) => {
+                const active = item.id === activePrompt.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => selectMode(item.id)}
+                    className={cn(
+                      focusRing,
+                      "rounded-md px-4 py-1.5 text-xs font-medium transition-colors duration-fast sm:text-sm",
+                      active
+                        ? "bg-foreground text-background shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
 
             <div className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-card p-2 pl-4 text-left shadow-sm sm:pl-5">
               <output
@@ -288,8 +288,8 @@ export function App() {
                 <a
                   key={launcher.id}
                   href={launcher.buildUrl(activePrompt.prompt)}
-                  target="_blank"
-                  rel="noreferrer"
+                  target={launcher.external ? "_blank" : undefined}
+                  rel={launcher.external ? "noreferrer" : undefined}
                   className={cn(
                     focusRing,
                     "inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-medium text-foreground transition-colors duration-fast hover:border-primary hover:text-primary",
