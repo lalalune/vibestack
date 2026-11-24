@@ -232,6 +232,10 @@ it("writes the catalog Studio reads, and tests that run every generated and manu
 it("writes the same bytes again, and nothing when nothing changed", () => {
   const before = everything();
   expect(run()).toMatchObject({ written: [], removed: [], analyzed: 0 });
+  writeFileSync(join(out, "catalog.json"), "{");
+  rmSync(join(out, "stories.browser.test.tsx"));
+  expect(run()).toMatchObject({ written: ["catalog.json", "stories.browser.test.tsx"], removed: [], analyzed: 0 });
+  expect(everything()).toEqual(before);
   rmSync(out, { recursive: true });
   expect(generator({ root })().written).toHaveLength(10);
   expect(everything()).toEqual(before);
