@@ -81,7 +81,9 @@ export async function runConformanceCommand(root: string, moduleName?: string, m
   const { seed } = profile(mode);
   const memory: Memory = { root, fresh: mode === "nightly", used: new Set() };
   const machines = new Map<string, Machine>();
-  const loaded = fs.mkdtempSync(path.join(cacheDirectory(root), "conformance-"));
+  const cache = cacheDirectory(root);
+  fs.mkdirSync(cache, { recursive: true });
+  const loaded = fs.mkdtempSync(path.join(cache, "conformance-"));
   const results: CommandResult[] = [];
 
   try {

@@ -138,15 +138,6 @@ function stockQuint(root: string, prelude: string) {
   fs.writeFileSync(cli, original.replace(/^#![^\n]*\n/, (shebang) => `${shebang}"use strict";\n${prelude}\n`));
   return { directory, manifest, cli };
 }
-/** `root` with node_modules of its own that also holds these tools as `vibestack`, as a project that installed them has. */
-function installed(root: string): string {
-  const modules = path.join(root, "node_modules");
-  fs.rmSync(modules, { force: true });
-  fs.mkdirSync(modules);
-  for (const entry of fs.readdirSync(nodeModules)) fs.symlinkSync(path.join(nodeModules, entry), path.join(modules, entry));
-  fs.symlinkSync(project, path.join(modules, "vibestack"), "dir");
-  return root;
-}
 /** A line of a test that cites a story or rule, built so that the root's check does not read it as one of its own. */
 const citing = (spec: string, heading: string) => `// ${spec}, ${JSON.stringify(heading)}\n`;
 /** A spec made of a single rule. */
@@ -1149,9 +1140,9 @@ pure val amountValues = Set(0, 1)`;
   });
 
   test("the application's types and tests are checked, in VibeLang and in the TypeScript beside it, on a Node that loads both; test/ that nothing runs gets Vitest, as `spec init` sets it up", async () => {
-    const never = (wrong: object) => installed(fixtures(["door"], (f) => Object.assign(f, wrong, {
+    const never = (wrong: object) => fixtures(["door"], (f) => Object.assign(f, wrong, {
       "test/never.test.vibe": citing("spec/door.md", "Story: Use the door") + 'import { assert, it } from "@effect/vitest"\nit("never holds", () => { assert.strictEqual(1, 2) })\n',
-    })));
+    }));
     const failingRoot = copyOfProject("test/app.test.vibe", (s) => s + "\n" + citing("spec/index.md", "Story: Check out") + 'it("never holds", () => { assert.strictEqual(1, 2) })\n');
     const manifest = JSON.parse(read("package.json", failingRoot));
     manifest.scripts.test = `node --input-type=module -e "delete process.env.NO_COLOR; process.env.FORCE_COLOR='1'; process.argv=[process.argv[0],'vitest','run']; await import(new URL('vitest.mjs',import.meta.resolve('vitest/package.json')));"`;
@@ -2029,6 +2020,7 @@ function eachCheck() {
       "package.json": JSON.stringify({ name: "skills", packageManager, scripts: { [hook]: scripts[hook] } }),
       "packages/vibestack/src/skill-links.ts": read("packages/vibestack/src/skill-links.ts"),
       "AGENTS.md": "Project instructions\n",
+      ".gitignore": `${scaffoldedIgnores.join("\n")}\n`,
       ".agents/skills/project/SKILL.md": "Project skill\n",
       ".agents/claude-settings.json": read(".agents/claude-settings.json"),
     });
@@ -3899,8 +3891,10 @@ function theCommandLine() {
 
   test("init gives a directory without a manifest one", () => {
     const root = scratch({});
-    assert.ok(init(root).includes("package.json scripts: dev, check, gen, accept, build, test"));
-    assert.deepEqual(Object.keys(JSON.parse(read("package.json", root))).sort(), ["dependencies", "devDependencies", "engines", "packageManager", "pnpm", "scripts", "type"]);
+    init(root);
+    const manifest = JSON.parse(read("package.json", root));
+    assert.deepEqual(Object.keys(manifest).sort(), ["dependencies", "devDependencies", "engines", "packageManager", "pnpm", "scripts", "type"]);
+    assert.deepEqual(Object.keys(manifest.scripts).sort(), ["accept", "build", "check", "dev", "gen", "new", "postinstall", "studio", "test"]);
   });
 
   test("an obligation not proved names its rules and leaves a lemma to start from; its acceptance outlives a change of prose and not one of Quint", async () => {
@@ -4803,11 +4797,11 @@ test("the barrel lint refuses non-barrel workspace exports, subpath imports, inl
     'import "@repo/ui/a/../styles.css";',
     'import "@repo/ui/";',
     'import "@repo/app/src/App";',
-    'import "vibestack-studio/src/project";',
   ];
-  for (const target of ["template/apps/app/src/probe.vibe", "packages/vibestack/src/spec.ts"]) {
-    const got = await barrelHits(live, target, badImports);
-    assert.equal(got.length, badImports.length, `${target}: ${got.join("\n")}`);
+  const toolWorkspaceImports = [...badImports, 'import "vibestack-studio/src/project";'];
+  for (const [target, imports] of [["template/apps/app/src/probe.vibe", badImports], ["packages/vibestack/src/spec.ts", toolWorkspaceImports]] as const) {
+    const got = await barrelHits(live, target, imports);
+    assert.equal(got.length, imports.length, `${target}: ${got.join("\n")}`);
     assert.ok(got.every((line) => line.includes("barrel/no-subpath-imports")));
     assert.ok(got.some((line) => line.includes("not a declared static asset export")));
   }
