@@ -55,7 +55,7 @@ export interface Model extends Roles {
   refusal?: { harness: string; guards: ReadonlySet<string> };
 }
 
-/** Where a definition came from in the spec, for doc comments and ordering. */
+/** Where a definition came from in the spec, for doc comments and diagnostics. */
 export interface Origin { rule: string; line: number }
 
 /** Names a spec may not bind: the generated code, the harness, Dafny's standard library (Std) or the proof library (ProofLib) use them, TypeScript reserves them, or Dafny does and LemmaScript passes them on unchanged. */
@@ -98,8 +98,39 @@ function concreteWitnesses(defs: Json[], roles: Roles, at: (name: string) => str
   return new Map(defs.map(stepsFor));
 }
 
+/** Eager values may read later declarations, including through function calls. Follow Quint's local bindings. */
+function orderedConstants(code: Json[]): Json[] {
+  const definitions = new Map(code.map((d) => [d.name, d]));
+  const seen = new Set<string>();
+  const values: Json[] = [];
+  function visit(def: Json) {
+    if (seen.has(def.name)) return;
+    seen.add(def.name);
+    function read(e: Json, locals: ReadonlySet<string>) {
+      if (e.kind === "let") {
+        read(e.opdef.expr, locals);
+        read(e.expr, new Set([...locals, e.opdef.name]));
+      } else if (e.kind === "lambda") {
+        read(e.expr, new Set([...locals, ...e.params.map((p: Json) => p.name)]));
+      } else if (e.kind === "name" || e.kind === "app") {
+        const name = e.kind === "name" ? e.name : e.opcode;
+        const dep = definitions.get(name);
+        if (dep && !locals.has(name)) visit(dep);
+        if (e.kind === "app") for (const arg of e.args) read(arg, locals);
+      }
+    }
+    read(def.expr, new Set());
+    if (def.qualifier === "pureval") values.push(def);
+  }
+  for (const def of code) if (def.qualifier === "pureval") visit(def);
+  return values;
+}
+
 export function generate(ir: Json, name: string, source: string, origin: (def: string) => Origin | undefined, deps: Map<string, Model>): Model {
-  const decls: Json[] = (ir.modules.find((m: Json) => m.name === name) ?? fail(`module ${name} not found`)).declarations;
+  // Quint assigns IDs as it parses the source, then reorders declarations for typechecking.
+  // Emit by numeric source ID so a simulator-only declaration cannot reshuffle the ordinary model.
+  const module = ir.modules.find((m: Json) => m.name === name) ?? fail(`module ${name} not found`);
+  const decls: Json[] = module.declarations.toSorted((a: Json, b: Json) => a.id - b.id);
 
   // --- what the module imports -------------------------------------------------
   // `import kernel.* from "./kernel"` brings a library's names in as they are. `import order as O from "./order"`
@@ -197,10 +228,9 @@ export function generate(ir: Json, name: string, source: string, origin: (def: s
     const params: Param[] = d.expr.params.map((p: Json, i: number) => ({ name: bind(p.name), type: t.args[i] }));
     return { params, result: t.res };
   };
-  const bySpecOrder = (x: Json, y: Json) => (origin(x.name)?.line ?? 0) - (origin(y.name)?.line ?? 0);
-  const vals = code.filter((d) => d.qualifier === "pureval");
+  const vals = orderedConstants(code);
   const constantIds = new Map<string, number>(vals.map((value) => [value.name, value.id]));
-  const funs = code.filter((d) => d.qualifier === "puredef").sort(bySpecOrder);
+  const funs = code.filter((d) => d.qualifier === "puredef");
   for (const d of funs) if (d.expr.kind !== "lambda") fail(`${d.name}: a \`pure def\` takes parameters; for a constant write \`pure val ${d.name} = …\``);
   // A rule must be a definition: as a `pure val` it would be generated as a constant and never checked.
   for (const v of vals) if (RULE_OR_GUARD.test(v.name) && typeOf(v.id).kind === "bool") fail(`${v.name}: a rule or guard is a \`pure def\` with parameters (SPEC.md, "What goes in the Quint blocks"), not a \`pure val\`; if it is a constant, name it otherwise`);
@@ -265,7 +295,7 @@ export function generate(ir: Json, name: string, source: string, origin: (def: s
     const ref = (n: string) => (localNames.has(n) ? local(n) : cameFrom.has(n) ? `${cameFrom.get(n)}_${n.split("::").pop()}` : n);
     const scoped = typeWalks(typedefs, name, prefix);
     const print = printer({ types: scoped, inferred, importedConstantType, ref, helper, bind, variants, definitions: new Set([...localNames, ...cameFrom.keys()]), simulatorOnly, proof });
-    return typescript({ header: proof ? bundleHeader : header, typedefs: [...localTypedefs].sort(bySpecOrder), vals, funs, sig, typeOf, doc: docs ? doc : () => "", local, source }, roles, scoped, print, helper);
+    return typescript({ header: proof ? bundleHeader : header, typedefs: localTypedefs, vals, funs, sig, typeOf, doc: docs ? doc : () => "", local, source }, roles, scoped, print, helper);
   };
   const ts = render("", true, false);
 

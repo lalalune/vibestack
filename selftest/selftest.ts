@@ -1040,6 +1040,30 @@ pure def alwaysValid(n: int): bool = n <= 2`);
     assert.ok(commits.every(({ picks, result }) => picks.approved === true && JSON.stringify(result) === '{"state":2,"out":["saved"]}'));
   });
 
+  test("adding a witness keeps ordinary simulation, proof and runtime generation stable", async () => {
+    const source = [
+      "type State = { count: int }",
+      "pure val initial: State = { count: offset(1) }",
+      "pure val other = 7",
+      "pure def offset(n: int): int = { val other = n; other + base }",
+      "pure def canAdvance(s: State, amount: int): bool = amount > s.count",
+      "pure def advance(s: State, amount: int): State = { count: amount }",
+      "pure def retreat(s: State): State = { count: s.count - 1 }",
+      "pure def alwaysCounts(s: State): bool = s.count >= 0",
+      "pure val base = 2",
+    ];
+    const emit = async (lines: string[]) => {
+      const root = oneRule("counter", "Count", lines.join("\n"));
+      const m = await gen(root, readSpecs(root)[0]);
+      const runtime = await import(pathToFileURL(path.join(root, "gen", "counter.ts")).href);
+      assert.deepEqual([runtime.initial, runtime.other], [{ count: 3 }, 7]);
+      return [m.harness, m.guardHarness, m.ts, m.render("proof_", false), m.exports.types, m.exports.values];
+    };
+    const guide = 'pure val eval_witness_canAdvance = ("advance", other)';
+    const [ordinary, guided] = await Promise.all([emit(source), emit([source[0], guide, ...source.slice(1)])]);
+    assert.deepEqual(guided, ordinary);
+  });
+
   test("a concrete witness uses the original guards and rules and supplies its steps to replay", async () => {
     const modelSource = `pure val initial: int = 0
 pure def publish(n: int, amount: int): int = amount
