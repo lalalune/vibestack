@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { type Component, generator, watched } from "../emit.ts";
+import { type Component, generator, listener, watched } from "../emit.ts";
 
 const root = mkdtempSync(join(realpathSync(tmpdir()), "stories-fixtures-"));
 cpSync(join(import.meta.dirname, "fixtures"), root, { recursive: true });
@@ -125,7 +125,7 @@ it("plays a disabled or loading story to check that a click, Enter or Space call
   expect(read("kit-kinds.stories.tsx")).not.toContain("refuses");
 });
 
-it("links a component to its spec model and renders it from the generated initial state", () => {
+it("links a component to its spec model and renders it from the generated initial state", async () => {
   expect(component("Receipt")).toMatchObject({ model: { spec: "spec/index.md", module: "index", state: "Order", events: ["addItem", "pay"] }, design: ["design.md#receipt"] });
   expect(component("Receipt").stories[1]).toEqual({ id: "kit-receipt--model", name: "Model", kind: "model", args: { order: { status: "Draft", units: 0 } } });
   expect(read("kit-receipt.stories.tsx")).toContain('import { initial } from "../../gen/index.ts";');
@@ -191,6 +191,26 @@ it("links a component to its spec model and renders it from the generated initia
   expect(generator({ root: ui, out: join(ui, "generated/empty") })().diagnostics).toEqual(empty.diagnostics);
   writeFiles(ui, { "gen/workflow.ts": from("../../../domain.ts", 4) });
   compare(4, "../../gen/workflow.ts");
+  rmSync(join(ui, "gen/workflow.ts"));
+  writeFiles(workspace, { "gen/workflow.ts": from("../domain.ts", 5) });
+  let last = generate();
+  const watchedStories = listener(ui, undefined, (observe) => { last = generate(observe); });
+  const shows = (units: number) => expect.poll(() => component("Receipt", last).stories[1]?.args, { timeout: 10000 }).toEqual({ order: { status: "Draft", units } });
+  try {
+    await shows(5);
+    writeFiles(workspace, { "gen/replacement.ts": from("../domain.ts", 6) });
+    renameSync(join(workspace, "gen/replacement.ts"), join(workspace, "gen/workflow.ts"));
+    await shows(6);
+    writeFiles(workspace, { "packages/plugin-workflows/gen/workflow.ts": from("../../../domain.ts", 7) });
+    await shows(7);
+    rmSync(join(workspace, "packages/plugin-workflows/gen"), { recursive: true });
+    await shows(6);
+    writeFiles(workspace, { "packages/plugin-workflows/gen/workflow.ts": from("../../../domain.ts", 8) });
+    await shows(8);
+  } finally {
+    watchedStories.close();
+  }
+
 });
 
 it("leaves a story to the hand-written file that has one of its name", () => {
