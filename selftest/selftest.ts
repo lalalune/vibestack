@@ -2020,6 +2020,7 @@ function eachCheck() {
       "package.json": JSON.stringify({ name: "skills", packageManager, scripts: { [hook]: scripts[hook] } }),
       "packages/vibestack/src/skill-links.ts": read("packages/vibestack/src/skill-links.ts"),
       "AGENTS.md": "Project instructions\n",
+      ".gitignore": `${scaffoldedIgnores.join("\n")}\n`,
       ".agents/skills/project/SKILL.md": "Project skill\n",
       ".agents/claude-settings.json": read(".agents/claude-settings.json"),
     });
@@ -4796,11 +4797,11 @@ test("the barrel lint refuses non-barrel workspace exports, subpath imports, inl
     'import "@repo/ui/a/../styles.css";',
     'import "@repo/ui/";',
     'import "@repo/app/src/App";',
-    'import "vibestack-studio/src/project";',
   ];
-  for (const target of ["template/apps/app/src/probe.vibe", "packages/vibestack/src/spec.ts"]) {
-    const got = await barrelHits(live, target, badImports);
-    assert.equal(got.length, badImports.length, `${target}: ${got.join("\n")}`);
+  const toolWorkspaceImports = [...badImports, 'import "vibestack-studio/src/project";'];
+  for (const [target, imports] of [["template/apps/app/src/probe.vibe", badImports], ["packages/vibestack/src/spec.ts", toolWorkspaceImports]] as const) {
+    const got = await barrelHits(live, target, imports);
+    assert.equal(got.length, imports.length, `${target}: ${got.join("\n")}`);
     assert.ok(got.every((line) => line.includes("barrel/no-subpath-imports")));
     assert.ok(got.some((line) => line.includes("not a declared static asset export")));
   }

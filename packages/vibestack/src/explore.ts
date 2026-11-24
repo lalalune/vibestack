@@ -100,7 +100,9 @@ export function pageInputs(root: string, mode: TestProfile = "normal"): string {
     if (name.startsWith("./") || name.startsWith("../")) {
       const at = path.resolve(path.dirname(from), name);
       const file = SUFFIXES.map((suffix) => at + suffix).find(isFile);
-      if (isDirectory(at)) for (const f of packageFiles(at, () => true)) {
+      const toBase = path.relative(at, base);
+      const enclosesBase = !toBase.startsWith("..") && !path.isAbsolute(toBase);
+      if (isDirectory(at) && !enclosesBase) for (const f of packageFiles(at, () => true)) {
         const scanned = fs.realpathSync(path.join(at, f));
         const own = path.relative(base, scanned).split(path.sep).join("/");
         if (own.startsWith("../") || !checkedOnly(own)) read(scanned, false);

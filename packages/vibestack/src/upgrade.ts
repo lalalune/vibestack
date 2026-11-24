@@ -267,8 +267,7 @@ export function initProject(root: string, options: InitOptions = {}): string[] {
     for (const [rel] of managed) {
       if (manifestFiles[rel]) continue;
       const target = path.join(root, rel);
-      const stat = fs.lstatSync(target, { throwIfNoEntry: false });
-      if (stat?.isFile()) manifestFiles[rel] = sha256(fs.readFileSync(target));
+      if (fs.existsSync(target) && fs.lstatSync(target).isFile()) manifestFiles[rel] = sha256(fs.readFileSync(target));
     }
     const nextManifest: ManagedManifest = { version: assets.version, files: manifestFiles };
     const nextSorted = JSON.stringify({ version: nextManifest.version, files: Object.fromEntries(Object.entries(nextManifest.files).sort(([a], [b]) => a.localeCompare(b))) }, null, 2) + "\n";
