@@ -70,9 +70,9 @@ export function nextStep(results: Result[]): string {
 }
 
 /** Take the project's lock for one check, accept or gen at a time; returns what releases it. A lock left by a process that has ended is taken over. */
-function lockProject(root: string): () => void {
-  const file = path.join(cacheDirectory(root), "lock");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+function lockProject(root: string, cache = cacheDirectory(root)): () => void {
+  const file = path.join(cache, "lock");
+  fs.mkdirSync(cache, { recursive: true });
   const alive = (pid: number) => {
     if (!Number.isSafeInteger(pid) || pid <= 0) return false;
     try {
@@ -245,16 +245,25 @@ export async function check(root: string, accept: false | "reviews" | "unproved"
   // below it, would wait on its lock or rewrite the gen/ those tests read.
   const fromTests = process.env.SPEC_TESTS ? path.relative(process.env.SPEC_TESTS, fs.realpathSync(root)) : undefined;
   if (fromTests !== undefined && fromTests.split(path.sep)[0] !== ".." && !path.isAbsolute(fromTests)) throw new Error("a test script cannot run spec check or accept: the check already runs the tests");
-  const release = lockProject(root);
-  const phases = observePhases(root);
   const wrote = new Map<string, string>();
+  let cache: string;
+  try {
+    cache = cacheDirectory(root);
+  } catch (error) {
+    const result: Result = { ok: false, stage: "model", summary: error instanceof Error ? error.message : String(error), detail: "" };
+    const results = [result];
+    log?.(result);
+    return { ok: false, results, next: nextStep(results), wrote };
+  }
+  const release = lockProject(root, cache);
+  const phases = observePhases(root);
   // A retry must reproduce every row already streamed before it can report another.
   const reported: Result[] = [];
   const attempt = async () => {
     // Separate module instances in this process, with repeatable paths for Node's on-disk compile cache across processes.
     const run = (checkRuns[CHECK_RUN] ?? 0) + 1;
     checkRuns[CHECK_RUN] = run;
-    const loaded = path.join(cacheDirectory(root), `run-${run}`);
+    const loaded = path.join(cache, `run-${run}`);
     const results: Result[] = [];
     let diverged = false;
     const report = (result: Result) => {
