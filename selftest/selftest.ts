@@ -1378,6 +1378,13 @@ pure val amountValues = Set(0, 1)`;
     assert.ok(bounded, "a public Vite base does not read the directory");
     fs.appendFileSync(path.join(enclosing, "unrelated.txt"), " unrelated edit");
     assert.equal(pageInputs(inner), bounded);
+    fs.writeFileSync(path.join(inner, "vite.config.ts"), 'const data = { base: "./" }; export default { plugins: [readDirectory(data.base)] };');
+    assert.equal(pageInputs(inner), undefined, "a plugin can read a directory stored in its own base property");
+    fs.writeFileSync(path.join(inner, "vite.config.ts"), 'const defineConfig = (args) => readDirectory(args.base); export default defineConfig({ base: "./" });');
+    assert.equal(pageInputs(inner), undefined, "a user function can consume its base as a directory");
+    fs.writeFileSync(path.join(inner, "vite.config.ts"), 'import { defineConfig as config } from "vite"; export default config({ base: "./" });');
+    assert.ok(pageInputs(inner), "Vite's own config helper accepts a URL base through an alias");
+    fs.writeFileSync(path.join(inner, "vite.config.ts"), 'export default { base: "./" };');
     fs.symlinkSync(enclosing, path.join(inner, "outer"), "dir");
     fs.writeFileSync(path.join(inner, "src/main.css"), '@source "../outer";');
     assert.equal(pageInputs(inner), undefined, "a symlinked Tailwind source is judged by its physical directory");
@@ -2803,19 +2810,10 @@ function eachCheck() {
     fs.renameSync(path.join(root, "vibestack"), path.join(root, "src"));
     fs.writeFileSync(path.join(root, "package.json"), '{"name":"vibestack","type":"module"}');
     fs.mkdirSync(path.join(root, "dist"));
-    fs.writeFileSync(path.join(root, "dist/skill-links.js"), 'if (import.meta.main) path.resolve(import.meta.dirname, "../");');
-    fs.writeFileSync(path.join(root, "dist/built-only.js"), "export default 1;");
+    fs.writeFileSync(path.join(root, "dist/skill-links.js"), 'const alias = import.meta.dirname; export const dir = path.resolve(alias, "../");');
     fs.writeFileSync(path.join(root, "runs/src/main.ts"), 'import "../../dist/skill-links.js";');
-    const compiled = await checked(`
-      const { pageInputs } = await import("./src/explore.ts");
-      const key = pageInputs("runs"), plain = pageInputs("plain");
-      fs.appendFileSync("dist/built-only.js", "export const a=1;");
-      const changedHelper = pageInputs("runs");
-      fs.appendFileSync("dist/skill-links.js", "export const b=2;");
-      const changedEntry = pageInputs("runs");
-      console.log(JSON.stringify([typeof key, key !== changedHelper, changedEntry !== changedHelper, pageInputs("plain") === plain]));
-    `);
-    assert.deepEqual(compiled, ["string", true, true, true], "a page running built tools reads their actual entry and helpers independently of the source tools that check it");
+    const built = await checked('const { pageInputs } = await import("./src/explore.ts"); console.log(JSON.stringify([pageInputs("runs"), typeof pageInputs("plain")]));');
+    assert.deepEqual(built, [null, "string"], "a built tool with a caller-dependent directory is uncacheable and an unrelated page remains cacheable");
   });
 
   test("a process that outlives a reinstall of Quint, as watch does, keys what it runs and simulates by the Quint installed now, and remembers its runs again", { skip: process.platform === "win32" }, async () => {

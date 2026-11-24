@@ -5,11 +5,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { installedPackages, siblingToolArtifact, toolScripts, toolsCode } from "./cache.ts";
+import { installedPackages, toolScripts, toolsCode } from "./cache.ts";
 import { chromiumForExplore } from "./chromium.ts";
 import { bin, exec, startGroup } from "./run.ts";
 import { profile, type TestProfile } from "./testing/profile.ts";
-import { appScript, COLOUR, COUNTEREXAMPLES, DRIVERS, filesUnder, indent, isTestFile, manifest, packageFiles, packageManager, servedAt, TRACES, type Remember, type Reported } from "./util.ts";
+import { appScript, COLOUR, COUNTEREXAMPLES, DRIVERS, filesUnder, indent, isTestFile, manifest, packageFiles, packageManager, servedAt, TRACES, tsApi, type Remember, type Reported } from "./util.ts";
 
 const SPECIFICATION = "test/bombadil.ts";
 const SAVED = "test/__traces__/bombadil";
@@ -69,6 +69,26 @@ function offered(dir: string): string[] {
   }).filter(isFile);
 }
 
+/** The literal public base in Vite's exported configuration names a URL. */
+function isVitePublicBase(from: string, literal: RegExpMatchArray): boolean {
+  if (!literal.input) return false;
+  const ts = tsApi();
+  const source = ts.createSourceFile(from, literal.input, ts.ScriptTarget.Latest, false);
+  const exported = source.statements.find(ts.isExportAssignment)?.expression;
+  let config = exported;
+  if (exported && ts.isCallExpression(exported) && ts.isIdentifier(exported.expression)) {
+    const callee = exported.expression.text;
+    const isViteConfig = source.statements.some((stmt) => {
+      if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier) || stmt.moduleSpecifier.text !== "vite") return false;
+      const imports = stmt.importClause?.namedBindings;
+      return imports && ts.isNamedImports(imports) && imports.elements.some((item) => item.name.text === callee && (item.propertyName ?? item.name).text === "defineConfig");
+    });
+    if (isViteConfig) config = exported.arguments[0];
+  }
+  return !!config && ts.isObjectLiteralExpression(config) && config.properties.some((prop) => ts.isPropertyAssignment(prop)
+    && (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) && prop.name.text === "base" && prop.initializer.getStart(source) === literal.index);
+}
+
 /**
  * What the page of the package at `root` reads, which its exploration is remembered under: the package's files but
  * those only its checks read; each file its code or its scripts name by a path, and each directory, which Tailwind
@@ -95,7 +115,6 @@ export function pageInputs(root: string, mode: TestProfile = "normal"): string |
     read(path.join(dir, "package.json"), false);
     for (const file of offered(dir)) read(file, true);
   };
-  const sibling = siblingToolArtifact();
   let complete = true;
   const follow = (from: string, name: string, quoted?: RegExpMatchArray) => {
     const before = quoted?.input?.slice(0, quoted.index);
@@ -116,9 +135,9 @@ export function pageInputs(root: string, mode: TestProfile = "normal"): string |
         if (toBase !== ".." && !toBase.startsWith(`..${path.sep}`) && !path.isAbsolute(toBase)) {
           // Vite's public base is a URL. A directory import, Tailwind source or dynamically
           // used directory URL may read the enclosing tree.
-          const publicBase = dir === base && /^vite\.config\.[cm]?[jt]s$/.test(path.basename(from)) && /\bbase\s*:\s*$/.test(before ?? "");
-          const toolPath = sibling?.scripts.has(from) && /\bpath\.(?:join|resolve)\(\s*(?:[\w$]+|import\.meta\.(?:dirname|filename))\s*,\s*$/.test(before ?? "");
-          if (!publicBase && !toolPath) complete = false;
+          const publicBase = dir === base && /^vite\.config\.[cm]?[jt]s$/.test(path.basename(from)) && quoted
+            && /\bbase\s*:\s*$/.test(before ?? "") && isVitePublicBase(from, quoted);
+          if (!publicBase) complete = false;
         } else {
           for (const f of packageFiles(dir, () => true)) {
             const scanned = fs.realpathSync(path.join(dir, f));
@@ -162,11 +181,6 @@ export function pageInputs(root: string, mode: TestProfile = "normal"): string |
   if (!complete) return undefined;
   const runsTools = [...tools].some((tool) => reads.has(tool));
   const hash = createHash("sha256").update(JSON.stringify(["page-v1", process.versions.node, process.platform, process.arch, profile(mode), runsTools && toolsCode()]));
-  if (sibling && [...reads.keys()].some((file) => sibling.scripts.has(file))) {
-    const bytes = sibling.digest();
-    if (bytes === undefined) return undefined;
-    hash.update(bytes);
-  }
   for (const [name, file] of [...reads.keys()].filter((file) => !tools.has(file)).map((file) => [path.relative(base, file).split(path.sep).join("/"), file]).sort(([a], [b]) => a.localeCompare(b))) {
     const bytes = fs.readFileSync(file);
     hash.update(`${name}\0${bytes.length}\0`).update(bytes);

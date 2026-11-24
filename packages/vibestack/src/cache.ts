@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { gunzipSync, zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { cacheDirectory } from "./config.ts";
-import { manifest, sha, tokenize } from "./util.ts";
+import { sha, tokenize } from "./util.ts";
 import { type Evaluator, installedEvaluator, executableDigest, InstallationChanged, LASTING, lasting, packageLocation, packageRoots } from "./installed.ts";
 import { NEEDS_DAFNY, findBin, findDafny, formatStamp, exec, onPath, stamp, writeWhole } from "./run.ts";
 
@@ -887,23 +887,6 @@ const { tools, unsure } = loadTools();
 const code = (files: string[]) => sha(...files.sort().map((f) => `${f}\0${tools.get(f)?.code}`)).slice(0, 12);
 /** Every tool's script, where it is: a page that runs one of them may run any (explore.ts, `pageInputs`). */
 export const toolScripts = () => [...tools.keys()].map((f) => path.join(import.meta.dirname, f));
-/** In a development install a page can run the source or built copy of the same tools. */
-export function siblingToolArtifact() {
-  const root = path.dirname(import.meta.dirname);
-  const layer = path.basename(import.meta.dirname);
-  if ((layer !== "src" && layer !== "dist") || manifest(root).name !== "vibestack") return undefined;
-  const dir = path.join(root, layer === "src" ? "dist" : "src");
-  const extension = layer === "src" ? ".js" : ".ts";
-  const scripts = new Set([...tools.keys()].map((file) => path.join(dir, file.slice(0, -ext.length) + extension)));
-  const digest = () => {
-    if (!fs.lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) return undefined;
-    const entries = fs.readdirSync(dir, { recursive: true, withFileTypes: true });
-    if (entries.some((entry) => !entry.isDirectory() && !entry.isFile())) return undefined;
-    const files = entries.filter((entry) => entry.isFile()).map((entry) => path.relative(dir, path.join(entry.parentPath, entry.name)).split(path.sep).join("/")).sort();
-    return treeDigest(dir, files);
-  };
-  return { scripts, digest };
-}
 /** The code of every tool, which such a page reads. */
 export const toolsCode = () => code([...tools.keys()]);
 /** The scripts that run when these do. */
