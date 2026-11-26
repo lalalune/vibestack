@@ -239,6 +239,8 @@ test("a build that changes nothing rewrites nothing, and the ESLint config flags
     .replace("tracking-tight", pick(tokens.tracking, "tracking-", "tracking-tight"))
   expect(await lint("good.tsx", eslint, projectGood)).toEqual([])
   expect(await lint("good.tsx", empty)).toEqual([])
+  const withSerif = linter("serif", JSON.stringify({ ...tokens, font: { ...tokens.font, serif: "Georgia, serif" } }))
+  expect(await lint("good.tsx", withSerif, 'export const S = () => <p className="font-serif">x</p>\n')).toEqual([])
   expect((await lint("scales.tsx", withScales)).map(({ line, ruleId }: { line: number; ruleId: string }) => [line, ruleId]))
     .toEqual(Array.from({ length: 12 }, (_, i) => [3 + i, restricted]))
 }, 60_000)

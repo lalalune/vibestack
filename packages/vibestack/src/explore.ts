@@ -24,8 +24,9 @@ export type Explored =
   | { kind: "diverged"; output: string }
   | { kind: "failed"; why: string; output: string };
 
-/** The package's page: an index.html at its top or under src/. */
-const pageOf = (root: string) => ["index.html", ...filesUnder(root, "src")].find((f) => /(?:^|\/)index\.html$/.test(f) && fs.existsSync(path.join(root, f)));
+const pageOf = (root: string) => fs.existsSync(path.join(root, "index.html"))
+  ? "index.html"
+  : filesUnder(root, "src").find((f) => /(?:^|\/)index\.html$/.test(f) && fs.existsSync(path.join(root, f)));
 
 /** A package's files that only its checks read: its tests and their configuration, drivers, traces, counterexamples, contracts, proofs and spec/. */
 const checkedOnly = (file: string) => isTestFile(file) || /^vitest\.(?:config|workspace)\.[^/]+$|\.contract\.[^/.]+$|\.proof\.dfy$/.test(file)
@@ -166,10 +167,16 @@ export function pageInputs(root: string, mode: TestProfile = "normal"): string |
     if (dir && (typeof bin === "string" ? [name.split("/").pop()!] : Object.keys(bin ?? {})).some((command) => words.has(command))) offer(dir);
   }
   const tools = new Set(toolScripts().map((tool) => fs.realpathSync(tool)));
+  const contentCache = new Map<string, Buffer>();
+  const readBytes = (file: string) => {
+    let bytes = contentCache.get(file);
+    if (!bytes) contentCache.set(file, bytes = fs.readFileSync(file));
+    return bytes;
+  };
   let next = 0;
   const walk = () => {
     for (; complete && next < queue.length; next++) if (!tools.has(queue[next]) && CODE.test(queue[next]) && path.basename(queue[next]) !== "package.json")
-      for (const match of fs.readFileSync(queue[next], "utf8").matchAll(QUOTED)) follow(queue[next], match[2], match);
+      for (const match of readBytes(queue[next]).toString("utf8").matchAll(QUOTED)) follow(queue[next], match[2], match);
   };
   walk();
   if (!complete) return undefined;
@@ -181,8 +188,8 @@ export function pageInputs(root: string, mode: TestProfile = "normal"): string |
   if (!complete) return undefined;
   const runsTools = [...tools].some((tool) => reads.has(tool));
   const hash = createHash("sha256").update(JSON.stringify(["page-v1", process.versions.node, process.platform, process.arch, profile(mode), runsTools && toolsCode()]));
-  for (const [name, file] of [...reads.keys()].filter((file) => !tools.has(file)).map((file) => [path.relative(base, file).split(path.sep).join("/"), file]).sort(([a], [b]) => a.localeCompare(b))) {
-    const bytes = fs.readFileSync(file);
+  for (const [name, file] of [...reads.keys()].filter((file) => !tools.has(file)).map((file) => [path.relative(base, file).split(path.sep).join("/"), file]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const bytes = readBytes(file);
     hash.update(`${name}\0${bytes.length}\0`).update(bytes);
   }
   const { lock } = packageManager(root);
@@ -233,20 +240,26 @@ async function served(root: string, script: string, checking: string, explore: (
   app.child.stdin.end();
   const said: string[] = [];
   let error: Error | undefined;
+  const readers: readline.Interface[] = [];
   try {
     const origin = await new Promise<string | undefined>((resolve) => {
       const timer = setTimeout(() => resolve(undefined), SAYS_WHERE_WITHIN);
       app.child.on("error", (e) => { error = e; });
-      for (const stream of [app.child.stdout, app.child.stderr]) readline.createInterface({ input: stream }).on("line", (line) => {
-        if (line.trim() && said.push(line) > 40) said.shift();
-        const at = servedAt(line);
-        if (at) { clearTimeout(timer); resolve(at); }
-      });
+      for (const stream of [app.child.stdout, app.child.stderr]) {
+        const reader = readline.createInterface({ input: stream });
+        readers.push(reader);
+        reader.on("line", (line) => {
+          if (line.trim() && said.push(line) > 40) said.shift();
+          const at = servedAt(line);
+          if (at) { clearTimeout(timer); resolve(at); }
+        });
+      }
       void app.closed.then(() => { clearTimeout(timer); resolve(undefined); });
     });
     if (!origin) return { kind: "failed", why: `\`${command}\` printed no http://localhost address ${error ? `(${error.message})` : app.child.exitCode === null ? `within ${SAYS_WHERE_WITHIN / 1000} s` : "before it ended"}`, output: said.join("\n") };
     return await explore(origin);
   } finally {
+    for (const reader of readers) reader.close();
     await app.stop();
   }
 }

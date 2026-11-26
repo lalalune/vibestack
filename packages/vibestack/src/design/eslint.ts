@@ -81,15 +81,16 @@ export function designSystem<Plugin>({ tailwind, tokens, entryPoint }: { tailwin
     ]
   })
   const shadow = `Use a shadow token: ${names(tokens.shadow, "shadow-")}.`
-  // Tailwind's default palette stays in the theme for third-party markup but is not ours to use.
+  const extraRadii = besides(radii)
+  const extraShadows = besides(Object.keys(tokens.shadow))
   const restrict = [
     { pattern: `${variants}[a-z-]+-(?:(?:${palette})-\\d{2,3}|white|black)${opacity}`, message: `"$0" is a palette color. ${colors}` },
     { pattern: `${variants}[a-z-]+-\\[(?:[^\\]]*(?:#[\\da-fA-F]{3,8}|${functional})[^\\]]*|(?:color:)?${named})\\]${opacity}`, message: `"$0" is an arbitrary color. ${colors}` },
     { pattern: `${variants}rounded(?:-[a-z]{1,2})?-\\[.+\\]!?$`, message: `"$0" is an arbitrary radius. ${radius}` },
-    { pattern: `${variants}rounded(?:-[a-z]{1,2})?-(?:${besides(radii)})!?$`, message: `"$0" is a radius the tokens do not define. ${radius}` },
+    ...(extraRadii ? [{ pattern: `${variants}rounded(?:-[a-z]{1,2})?-(?:${extraRadii})!?$`, message: `"$0" is a radius the tokens do not define. ${radius}` }] : []),
     { pattern: `${variants}shadow-\\[.+\\]!?$`, message: `"$0" is an arbitrary shadow. ${shadow}` },
-    { pattern: `${variants}shadow-(?:${besides(Object.keys(tokens.shadow))})!?$`, message: `"$0" is a shadow the tokens do not define. ${shadow}` },
-    { pattern: `${variants}font-serif!?$`, message: `"$0" is a font the tokens do not define. Use a font token: ${names(tokens.font, "font-")}.` },
+    ...(extraShadows ? [{ pattern: `${variants}shadow-(?:${extraShadows})!?$`, message: `"$0" is a shadow the tokens do not define. ${shadow}` }] : []),
+    ...("serif" in tokens.font ? [] : [{ pattern: `${variants}font-serif!?$`, message: `"$0" is a font the tokens do not define. Use a font token: ${names(tokens.font, "font-")}.` }]),
     { pattern: `${variants}(?:drop-shadow-\\[.+\\]|\\[(?:box-shadow|filter):.+\\])$`, message: `"$0" is an arbitrary shadow or filter. Use a token: ${names(tokens.shadow, "shadow-")}, ${names(tokens.dropShadow, "drop-shadow-")}.` },
     ...declared,
   ]

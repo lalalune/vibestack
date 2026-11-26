@@ -1,36 +1,49 @@
-// The traces stage (SPEC.md, "Conformance"): each package's drivers, `driver:` programs and recorded traces, run
-// against its specs with the events the simulator found. conformance.ts does the comparing for all three.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { profile, type TestProfile } from "./testing/profile.ts";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
-import { check, compareObservation, ConformanceError, departure, planModel, replay, transition, type Found, type Line, type Oracle, type Sent } from "./conformance.ts";
+import { canonical, check, compareObservation, ConformanceError, departure, planModel, replay, transition, type Found, type Line, type Oracle, type Sent } from "./conformance.ts";
 import type { Model } from "./gen.ts";
 import { heading, type Spec } from "./parse.ts";
-import type { Step } from "./simulate.ts";
 import { exec, startGroup } from "./run.ts";
+import type { Step } from "./simulate.ts";
+import { profile, type TestProfile } from "./testing/profile.ts";
 import { COUNTEREXAMPLES, DRIVERS, filesUnder, indent, sha, testInputs, TRACES, type Remember, type Reported } from "./util.ts";
 
 export type Simulated = Found<any> & { traces: Sent<any>[][] };
 export interface Machine { domain: Oracle<any, any>; model: Model; found: Simulated }
 
-/** The events and witnessed journeys already examined by the simulator. */
+const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
 export function conformanceFound(model: Model, spec: Spec, traces: Step[][], witnesses: { w: string; trace: Step[] }[]): Simulated {
   const events = new Map<string, any>();
-  for (const { event } of traces.flat()) if (event) events.set(JSON.stringify(event), event);
-  for (const { evaluated } of traces.flat()) {
-    if (!evaluated) continue;
-    const transition = model.transitions.find((t) => t.guard === evaluated.name);
-    const sample = [...events.values()].find((event) => event.type === transition?.name);
-    if (transition && sample) {
-      const event = { ...sample, ...evaluated.picks };
-      events.set(JSON.stringify(event), event);
+  const sampleByType = new Map<string, any>();
+  for (const trace of traces) {
+    for (const { event } of trace) {
+      if (!event) continue;
+      const key = canonical(event, "scalar");
+      if (!events.has(key)) events.set(key, event);
+      const type = String(event.type ?? "");
+      if (type && !sampleByType.has(type)) sampleByType.set(type, event);
     }
   }
-  const rawTraces = traces.map((trace) => trace.flatMap((step) => step.event ? [step.event] : []));
+  const transitionByGuard = new Map(model.transitions.filter((t) => t.guard).map((t) => [t.guard!, t]));
+  for (const trace of traces) {
+    for (const { evaluated } of trace) {
+      if (!evaluated) continue;
+      const t = transitionByGuard.get(evaluated.name);
+      const sample = t ? sampleByType.get(t.name) : undefined;
+      if (t && sample) {
+        const event = { ...sample, ...evaluated.picks };
+        const key = canonical(event, "scalar");
+        if (!events.has(key)) events.set(key, event);
+      }
+    }
+  }
+  const rawTraces = traces.map((trace) => trace.flatMap((step) => step.event ? [step.event] : [])).filter((trace) => trace.length > 0);
   const byTransition = new Map<string, Sent<any>[]>();
   for (const trace of rawTraces) {
     for (let i = 0; i < trace.length; i++) {
@@ -43,15 +56,15 @@ export function conformanceFound(model: Model, spec: Spec, traces: Step[][], wit
   const keptTraces = new Map<string, Sent<any>[]>();
   for (const trace of [...byTransition.values(), ...rawTraces]) {
     if (keptTraces.size >= 100) break;
-    keptTraces.set(JSON.stringify(trace), trace);
+    keptTraces.set(canonical(trace, "scalar"), trace);
   }
   return {
     spec: model.name, source: model.source, sender: !!model.sender, shape: model.shape!, outputShape: model.outputShape,
     transitions: model.transitions.map((t) => t.name),
-    events: [...events.values()].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
-    journeys: witnesses.map(({ w, trace }) => {
-      const rule = spec.rules.find((rule) => rule.defs.includes(w))!;
-      return { story: rule.story, rule: heading(rule), events: trace.flatMap((step) => step.event ? [step.event] : []) };
+    events: [...events.entries()].sort(([a], [b]) => compareText(a, b)).map(([, event]) => event),
+    journeys: witnesses.flatMap(({ w, trace }) => {
+      const rule = spec.rules.find((r) => r.defs.includes(w));
+      return rule ? [{ story: rule.story, rule: heading(rule), events: trace.flatMap((step) => step.event ? [step.event] : []) }] : [];
     }),
     traces: [...keptTraces.values()],
   };
@@ -113,9 +126,11 @@ async function drive(root: string, machine: Machine, command: string): Promise<s
   });
   const orderedTraces = new Map<string, readonly Sent<any>[]>();
   for (const trace of [...plan.paths.map((p) => p.events), ...found.traces]) {
-    orderedTraces.set(JSON.stringify(trace), trace);
+    orderedTraces.set(canonical(trace, "scalar"), trace);
   }
+  const requests = found.events.map(({ by, ...event }: any): Line => model.sender ? { event, by } : { event });
   const program = driver(root, command);
+  let refusalOffset = 0;
   try {
     for (const [n, events] of [...orderedTraces.values()].entries()) {
       const initial = await program.ask({});
@@ -124,20 +139,46 @@ async function drive(root: string, machine: Machine, command: string): Promise<s
       if (resetProblem) return `trace ${n + 1}: reset ${resetProblem}`;
       let current = domain.initial;
       const request = ({ by, ...event }: any): Line => model.sender ? { event, by } : { event };
-      const send = async (input: Line) => { lines.push({ ...input, ...await program.ask(input) }); };
-      // Before each event and after the last, up to two that the spec refuses in that state.
-      const refuse = async () => { for (const line of found.events.map(request).filter((line) => !domain.enabled(current, line.event, line.by)).slice(0, 2)) await send(line); };
-      for (const sent of events) {
-        await refuse();
-        const next = request(sent);
-        await send(next);
-        const applied = transition(domain, found, current, next.event, next.by);
+      const sendAndCheck = async (input: Line): Promise<string | undefined> => {
+        const answer = await program.ask(input);
+        const line: Line = { ...input, ...answer };
+        lines.push(line);
+        const applied = transition(domain, found, current, input.event, input.by);
         if (typeof applied === "string") return applied;
         current = applied.after;
+        if (Object.hasOwn(line, "out")) {
+          if (!found.outputShape) return `trace ${n + 1}, line ${lines.length}: this spec does not emit effects\n${lines.map((l) => JSON.stringify(l)).join("\n")}`;
+          if (canonical(line.out, found.outputShape) !== canonical(applied.out, found.outputShape)) {
+            return `trace ${n + 1}, line ${lines.length}: emitted effects differ from the spec\n${lines.map((l) => JSON.stringify(l)).join("\n")}`;
+          }
+        }
+        const problem = compareObservation(domain, found, current, line.state);
+        if (problem) return `trace ${n + 1}, line ${lines.length}: ${problem}\n${lines.map((l) => JSON.stringify(l)).join("\n")}`;
+      };
+      const refuse = async (): Promise<string | undefined> => {
+        if (!requests.length) return undefined;
+        let sentCount = 0;
+        const seenTypes = new Set<string>();
+        for (let k = 0; k < requests.length && sentCount < 2; k++) {
+          const idx = (refusalOffset + k) % requests.length;
+          const line = requests[idx];
+          const type = String((line.event as { type?: unknown })?.type ?? "");
+          if (seenTypes.has(type) || domain.enabled(current, line.event, line.by)) continue;
+          seenTypes.add(type);
+          refusalOffset = (idx + 1) % requests.length;
+          sentCount++;
+          const problem = await sendAndCheck(line);
+          if (problem) return problem;
+        }
+      };
+      for (const sent of events) {
+        const refuseProblem = await refuse();
+        if (refuseProblem) return refuseProblem;
+        const stepProblem = await sendAndCheck(request(sent));
+        if (stepProblem) return stepProblem;
       }
-      await refuse();
-      const off = departure(domain, found, lines);
-      if (off) return `trace ${n + 1}, line ${off.line}: ${off.why}\n${lines.map((line) => JSON.stringify(line)).join("\n")}`;
+      const tailRefuse = await refuse();
+      if (tailRefuse) return tailRefuse;
     }
   } finally { await program.end(); }
 }
@@ -172,16 +213,22 @@ export const driver: Driver = {
 };
 `;
 
-/**
- * Run `test/drivers/<name>.ts` of the package `root` in a Node of its own that runs VibeLang (`main` below), and say
- * what it found: every saved counterexample, then the journeys, the probes and the walks. A counterexample it saves
- * is added to `wrote`.
- */
+function resolveVibeRegister(root: string): string | undefined {
+  try {
+    return createRequire(path.join(root, "package.json")).resolve("vibelang/register");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "MODULE_NOT_FOUND") return undefined;
+    throw error;
+  }
+}
+
 async function driven(root: string, name: string, machine: Machine, mode: TestProfile, wrote: Map<string, string>): Promise<{ problem?: string; summary?: string }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "spec-driver-")), found = path.join(dir, "found.json"), saved = `${COUNTEREXAMPLES}/${name}`;
   const before = new Set(filesUnder(root, saved));
   fs.writeFileSync(found, JSON.stringify(machine.found));
-  const r = await exec(process.execPath, ["--import", "vibelang/register", import.meta.filename, name, found, mode], root).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const vibeRegister = resolveVibeRegister(root);
+  const nodeArgs = [...(vibeRegister ? ["--import", pathToFileURL(vibeRegister).href] : []), import.meta.filename, name, found, mode];
+  const r = await exec(process.execPath, nodeArgs, root).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
   for (const file of filesUnder(root, saved).filter((file) => !before.has(file))) wrote.set(path.join(root, file), fs.readFileSync(path.join(root, file), "utf8"));
   let verdict: { problem?: string; summary?: string } | undefined;
   if (!r.stopped) {
@@ -263,7 +310,8 @@ export async function conformance(root: string, machines: Map<string, Machine>, 
   const dir = path.join(root, TRACES);
   for (const file of fs.existsSync(dir) ? fs.readdirSync(dir).filter((file) => file.endsWith(".jsonl")).sort() : []) {
     const machine = machines.get(file.split(".")[0]);
-    const lines = fs.readFileSync(path.join(dir, file), "utf8").trimEnd().split("\n").map((line) => { try { return JSON.parse(line); } catch { return line; } });
+    const rawText = fs.readFileSync(path.join(dir, file), "utf8").trimEnd();
+    const lines = rawText ? rawText.split("\n").map((line) => { try { return JSON.parse(line); } catch { return line; } }) : [];
     const off = machine && departure(machine.domain, machine.found, lines);
     add(`${TRACES}/${file}`, machine, machine ? off && `line ${off.line}: ${off.why}` : "no state-machine spec has this name", `${lines.length} recorded lines`);
   }
