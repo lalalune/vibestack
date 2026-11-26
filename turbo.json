@@ -4,24 +4,27 @@
   "globalDependencies": [
     ".nvmrc",
     "pnpm-workspace.yaml",
-    "tsconfig.base.json",
-    "packages/vibestack/src/*.ts",
-    "packages/vibestack/src/gen/**",
-    "packages/vibestack/src/proof/**",
-    "packages/vibestack/src/std/**",
-    "packages/vibestack/src/testing/**",
-    "packages/vibestack/src/stories/**",
-    "packages/vibestack/src/design/**",
-    "!packages/vibestack/**/{node_modules,.cache}/**",
-    "!packages/vibestack/src/remote-cache.ts",
-    "!packages/vibestack/src/proof/lib.dfy",
-    "!packages/vibestack/src/testing/test/**",
-    "!packages/vibestack/src/stories/test/**",
-    "!packages/vibestack/src/design/test/**",
-    ".cache/toolchain.json"
+    "tsconfig.base.json"
   ],
   "tasks": {
     "gen": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/vibestack/src/*.ts",
+        "$TURBO_ROOT$/packages/vibestack/src/gen/**",
+        "$TURBO_ROOT$/packages/vibestack/src/proof/**",
+        "$TURBO_ROOT$/packages/vibestack/src/std/**",
+        "$TURBO_ROOT$/packages/vibestack/src/testing/**",
+        "$TURBO_ROOT$/packages/vibestack/src/stories/**",
+        "$TURBO_ROOT$/packages/vibestack/src/design/**",
+        "!$TURBO_ROOT$/packages/vibestack/**/{node_modules,.cache}/**",
+        "!$TURBO_ROOT$/packages/vibestack/src/remote-cache.ts",
+        "!$TURBO_ROOT$/packages/vibestack/src/proof/lib.dfy",
+        "!$TURBO_ROOT$/packages/vibestack/src/testing/test/**",
+        "!$TURBO_ROOT$/packages/vibestack/src/stories/test/**",
+        "!$TURBO_ROOT$/packages/vibestack/src/design/test/**",
+        "$TURBO_ROOT$/.cache/toolchain.json"
+      ],
       "outputs": [
         "gen/**",
         "generated/**"
@@ -113,7 +116,6 @@
       "outputs": [
         "dist/**",
         "assets/**",
-        "README.md",
         "LICENSE"
       ]
     },
@@ -130,7 +132,8 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/template/packages/design-system/tokens.json",
-        "$TURBO_ROOT$/template/packages/design-system/design.md"
+        "$TURBO_ROOT$/template/packages/design-system/design.md",
+        "$TURBO_ROOT$/.cache/toolchain.json"
       ],
       "outputs": [
         ".cache/test-result-*.json"
@@ -146,15 +149,13 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/template/**",
-        "$TURBO_ROOT$/LICENSE",
-        "!$TURBO_ROOT$/template/**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static,gen}/**",
+        "!$TURBO_ROOT$/template/**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,.studio,.lemmascript,_apalache-out,__traces__,generated,storybook-static,gen}/**",
         "!$TURBO_ROOT$/template/**/.DS_Store",
         "!template/**"
       ],
       "outputs": [
         "dist/**",
-        "template/**",
-        "LICENSE"
+        "template/**"
       ]
     },
     "create-vibestack#typecheck": {
@@ -190,7 +191,21 @@
         "template/packages/*/package.json",
         "template/packages/*/spec/**",
         "template/package.json",
-        "package.json"
+        "package.json",
+        "packages/vibestack/src/*.ts",
+        "packages/vibestack/src/gen/**",
+        "packages/vibestack/src/proof/**",
+        "packages/vibestack/src/std/**",
+        "packages/vibestack/src/testing/**",
+        "packages/vibestack/src/stories/**",
+        "packages/vibestack/src/design/**",
+        "!packages/vibestack/**/{node_modules,.cache}/**",
+        "!packages/vibestack/src/remote-cache.ts",
+        "!packages/vibestack/src/proof/lib.dfy",
+        "!packages/vibestack/src/testing/test/**",
+        "!packages/vibestack/src/stories/test/**",
+        "!packages/vibestack/src/design/test/**",
+        ".cache/toolchain.json"
       ],
       "outputs": [
         "template/gen/**",
@@ -244,7 +259,7 @@
         "selftest/**",
         "examples/order/**",
         "!selftest/selftests/{docs,examples}.ts",
-        "!packages/vibestack/{assets,README.md,LICENSE}/**",
+        "!packages/vibestack/assets/**",
         "!packages/vibestack/README.md",
         "!packages/vibestack/LICENSE",
         "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static,__traces__}/**",
@@ -257,7 +272,8 @@
         "package.json",
         "pnpm-lock.yaml",
         "turbo.json",
-        "tsconfig.json"
+        "tsconfig.json",
+        ".cache/toolchain.json"
       ],
       "outputs": [],
       "env": [
@@ -293,7 +309,8 @@
         "package.json",
         "pnpm-lock.yaml",
         "turbo.json",
-        "tsconfig.json"
+        "tsconfig.json",
+        ".cache/toolchain.json"
       ],
       "outputs": [],
       "env": [
@@ -337,7 +354,8 @@
         "package.json",
         "pnpm-lock.yaml",
         "turbo.json",
-        "tsconfig.json"
+        "tsconfig.json",
+        ".cache/toolchain.json"
       ],
       "outputs": [],
       "env": [
@@ -375,7 +393,8 @@
         "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static,__traces__}/**",
         "!**/.DS_Store",
         "!{template,packages/studio,examples}/**/gen/**",
-        "package.json"
+        "package.json",
+        ".cache/toolchain.json"
       ],
       "outputs": [
         "examples/*/.spec-cache/tests-*.json.{gz,zst}"
@@ -411,6 +430,7 @@
         "!packages/create-vibestack/template/**",
         "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**",
         "!**/.DS_Store",
+        "!**/*.{md,dfy,qnt}",
         "!{template,packages/studio}/**/gen/**",
         "package.json",
         "pnpm-workspace.yaml",
@@ -447,6 +467,7 @@
         "!packages/create-vibestack/template/**",
         "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**",
         "!**/.DS_Store",
+        "!**/*.{md,dfy,qnt}",
         "!{template,packages/studio}/**/gen/**",
         "package.json",
         "pnpm-workspace.yaml",
@@ -468,6 +489,23 @@
     },
     "vibestack-studio#gen": {
       "env": ["!VITE_*"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/vibestack/src/*.ts",
+        "$TURBO_ROOT$/packages/vibestack/src/gen/**",
+        "$TURBO_ROOT$/packages/vibestack/src/proof/**",
+        "$TURBO_ROOT$/packages/vibestack/src/std/**",
+        "$TURBO_ROOT$/packages/vibestack/src/testing/**",
+        "$TURBO_ROOT$/packages/vibestack/src/stories/**",
+        "$TURBO_ROOT$/packages/vibestack/src/design/**",
+        "!$TURBO_ROOT$/packages/vibestack/**/{node_modules,.cache}/**",
+        "!$TURBO_ROOT$/packages/vibestack/src/remote-cache.ts",
+        "!$TURBO_ROOT$/packages/vibestack/src/proof/lib.dfy",
+        "!$TURBO_ROOT$/packages/vibestack/src/testing/test/**",
+        "!$TURBO_ROOT$/packages/vibestack/src/stories/test/**",
+        "!$TURBO_ROOT$/packages/vibestack/src/design/test/**",
+        "$TURBO_ROOT$/.cache/toolchain.json"
+      ],
       "outputs": ["gen/**", "generated/**"]
     },
     "vibestack-studio#dev": {
@@ -482,6 +520,11 @@
       "dependsOn": [
         "gen",
         "^build"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!test/**",
+        "!README.md"
       ],
       "outputs": [
         "dist/**"
@@ -541,6 +584,10 @@
       "dependsOn": [
         "^build"
       ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/.cache/toolchain.json"
+      ],
       "outputs": []
     },
     "@repo/design-system#build": {
@@ -561,6 +608,13 @@
     "@repo/cli#test": {
       "dependsOn": [
         "^build"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/template/package.json",
+        "$TURBO_ROOT$/template/spec/**/*.md",
+        "$TURBO_ROOT$/template/apps/*/package.json",
+        "$TURBO_ROOT$/template/packages/*/package.json"
       ],
       "outputs": [
         ".cache/test-result-*.json"

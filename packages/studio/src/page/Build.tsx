@@ -289,8 +289,15 @@ export function BuildDrawer() {
   const logRef = useRef<HTMLPreElement>(null);
   const snap = S.snap;
   const [reviewOpen, setReviewOpen] = useState(false);
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; });
-  if (!S.drawer) return null;
+  const job = snap
+    ? [snap.jobs.agent, snap.jobs.accept, snap.jobs.build].filter((j): j is JobView => !!j).sort((a, b) => b.started - a.started)[0]
+    : undefined;
+  const drawer = S.drawer;
+  const logLength = job?.log.length ?? 0;
+  useEffect(() => {
+    if (drawer && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [drawer, logLength, job?.started]);
+  if (!drawer) return null;
   if (!snap) {
     return (
       <aside aria-label="Build" className="fixed top-12 right-0 bottom-0 z-30 flex w-90 max-w-[92vw] flex-col gap-4 border-l border-border bg-card p-4 shadow-lg">
@@ -300,7 +307,6 @@ export function BuildDrawer() {
   }
   const { job: running } = snap.session;
   const { jobs, check, manifest } = snap;
-  const job = [jobs.agent, jobs.accept, jobs.build].filter((j): j is JobView => !!j).sort((a, b) => b.started - a.started)[0];
   const blocking = failing(check?.results);
   const review = snap.review.length;
   const steps = pipelineSteps();

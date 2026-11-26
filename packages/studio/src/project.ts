@@ -9,7 +9,7 @@ import { trusted } from "vibelang-runtime";
 import type { Result } from "../../vibestack/src/pipeline.ts";
 import { isStd, parseSpec, readSpecs, specFiles, specName } from "../../vibestack/src/parse.ts";
 import { citationLookup, ledgerFile, pending, pendingContracts, pendingKey, pendingSpecs, type Lock, type Pending, type ReviewSpec } from "../../vibestack/src/review.ts";
-import { appScript as scriptOfApp, citations, filesUnder, packageScripts, projectRoot, servedAt, short } from "../../vibestack/src/util.ts";
+import { appScript as scriptOfApp, citations, codeDirs, filesUnder, packageCode, packageScripts, projectRoot, servedAt, short, type Citation } from "../../vibestack/src/util.ts";
 import type { Session, Verdict } from "../gen/index.ts";
 import type { Outline } from "../gen/outline.ts";
 import { manifestOf, nodesOf, type Ids, type Manifest } from "./doc.ts";
@@ -183,6 +183,24 @@ const reviewItem = (p: Pending, file?: string): ReviewItem => ({
 export interface ProjectTree {
   readonly root: string;
   parsed?: { texts: Record<string, string>; fileCount: number; specs: ReviewSpec[] };
+  meta?: { componentsStamp: string; citationsStamp: string; components?: ComponentIndex; citations: Citation[] };
+  graphCache?: { key: string; specs: SpecView[]; graphs: Record<string, SpecModelGraph> };
+}
+
+function stampPaths(paths: string[]): string {
+  return short(paths.map((full) => {
+    const stat = fs.lstatSync(full, { bigint: true, throwIfNoEntry: false });
+    return `${full} ${stat?.ino} ${stat?.ctimeNs} ${stat?.size}`;
+  }).join("\n"));
+}
+
+function catalogPaths(root: string): string[] {
+  const dirs = [".", ...["apps", "packages"].flatMap((d) => (fs.existsSync(path.join(root, d)) ? fs.readdirSync(path.join(root, d)).map((n) => `${d}/${n}`) : []))];
+  return dirs.map((dir) => path.join(root, dir, "generated/stories/catalog.json"));
+}
+
+function citationSourcePaths(root: string): string[] {
+  return codeDirs(root).flatMap((dir) => packageCode(path.join(root, dir)).map((f) => path.join(root, dir, f)));
 }
 
 function safePendingContracts(root: string): Pending[] {
@@ -202,14 +220,33 @@ function safePendingContracts(root: string): Pending[] {
 export const readTree = trusted(function readTree(tree: ProjectTree): Pick<Snapshot, "specs" | "review" | "problem" | "graphs"> {
   const { root } = tree;
   const texts = specTexts(root);
-  const entries = Object.entries(texts);
-  const specs = entries.sort(([a], [b]) => specOrder(a, b))
-    .map(([file, text]) => ({ file, module: specName(file), hash: short(text), text, outline: outlineOf(file, text) }));
-  const components = (() => { try { return componentsOf(root); } catch { return undefined; } })();
-  const allCitations = (() => { try { return citations(root); } catch { return []; } })();
-  const graphs: Record<string, SpecModelGraph> = Object.fromEntries(
-    specs.map((s) => [s.file, graphOfSpec(s.file, s.text, components, allCitations)]),
-  );
+  const entries = Object.entries(texts).sort(([a], [b]) => specOrder(a, b));
+  const componentsStamp = stampPaths(catalogPaths(root));
+  const citationsStamp = stampPaths(citationSourcePaths(root));
+  let components: ComponentIndex | undefined;
+  let allCitations: Citation[];
+  if (tree.meta && tree.meta.componentsStamp === componentsStamp && tree.meta.citationsStamp === citationsStamp) {
+    components = tree.meta.components;
+    allCitations = tree.meta.citations;
+  } else {
+    components = (() => { try { return componentsOf(root); } catch { return undefined; } })();
+    allCitations = (() => { try { return citations(root); } catch { return []; } })();
+    tree.meta = { componentsStamp, citationsStamp, components, citations: allCitations };
+  }
+  const graphKey = short(`${entries.map(([f, t]) => `${f}\0${t}`).join("\0")}\0${componentsStamp}\0${citationsStamp}`);
+  let specs: SpecView[];
+  let graphs: Record<string, SpecModelGraph>;
+  if (tree.graphCache && tree.graphCache.key === graphKey) {
+    specs = tree.graphCache.specs;
+    graphs = tree.graphCache.graphs;
+  } else {
+    specs = entries
+      .map(([file, text]) => ({ file, module: specName(file), hash: short(text), text, outline: outlineOf(file, text) }));
+    graphs = Object.fromEntries(
+      specs.map((s) => [s.file, graphOfSpec(s.file, s.text, components, allCitations)]),
+    );
+    tree.graphCache = { key: graphKey, specs, graphs };
+  }
   try {
     const previous = tree.parsed;
     let read: ReviewSpec[];
@@ -236,10 +273,10 @@ export const graphOfDraft = trusted(function graphOfDraft(root: string, file: st
 }, [Error]);
 
 /** Start or reuse the embedded Vite preview server for `root`, or return `{ url: null, mode: "none" }`. */
-export async function studioPreview(root: string): Promise<PreviewInfo> {
+export async function studioPreview(root: string, allowedOrigins: readonly string[] = []): Promise<PreviewInfo> {
   let components: ComponentIndex | undefined;
   try { components = componentsOf(root); } catch { components = undefined; }
-  return ensurePreview(root, components);
+  return ensurePreview(root, components, allowedOrigins);
 }
 
 export { closePreview, simulateModule };
@@ -254,6 +291,77 @@ function resolveWorkspaceInput(specifier: string): string | undefined {
   }
 }
 
+function pageIsFresh(studio: string): boolean {
+  const built = fs.statSync(path.join(PUBLIC, "index.html"), { throwIfNoEntry: false })?.mtimeMs ?? 0;
+  if (built <= 0) return false;
+  const newest = (dir: string): number => fs.readdirSync(dir, { withFileTypes: true }).reduce((n, e) => e.name === "node_modules" ? n
+    : Math.max(n, e.isDirectory() ? newest(path.join(dir, e.name)) : fs.statSync(path.join(dir, e.name)).mtimeMs), 0);
+  const uiEntry = resolveWorkspaceInput("@repo/ui");
+  const tokensEntry = resolveWorkspaceInput("@repo/design-system/tokens.json");
+  const inputs = [
+    path.join(studio, "src", "page"),
+    path.join(studio, "src", "markdown.ts"),
+    path.join(studio, "gen", "index.ts"),
+    path.join(studio, "gen", "outline.ts"),
+    path.join(studio, "gen", "components.ts"),
+    path.join(studio, "gen", "components.effect.vibe"),
+    path.join(studio, "gen", "components.react.ts"),
+    path.join(studio, "vite.config.ts"),
+    path.join(studio, "pack-page.ts"),
+    path.join(TOOLS, "scan.ts"),
+    path.join(TOOLS, "design"),
+    ...(uiEntry ? [path.dirname(uiEntry)] : []),
+    ...(tokensEntry ? [tokensEntry] : []),
+  ].filter((f) => fs.existsSync(f));
+  return inputs.every((f) => (fs.statSync(f).isDirectory() ? newest(f) : fs.statSync(f).mtimeMs) <= built);
+}
+
+function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function withPageBuildLock<T>(studio: string, fn: () => Promise<T>): Promise<T> {
+  const lockDir = path.join(studio, ".vibe");
+  const lockFile = path.join(lockDir, "page-build.lock");
+  fs.mkdirSync(lockDir, { recursive: true });
+  const deadline = Date.now() + 120_000;
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockFile, "wx");
+      try { fs.writeFileSync(fd, `${process.pid}\n`); } finally { fs.closeSync(fd); }
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      let stale = false;
+      try {
+        const text = fs.readFileSync(lockFile, "utf8").trim();
+        const pid = Number(text);
+        const stat = fs.statSync(lockFile);
+        if ((text && !pidAlive(pid)) || Date.now() - stat.mtimeMs > 120_000) stale = true;
+      } catch {
+        stale = false;
+      }
+      if (stale) {
+        try { fs.unlinkSync(lockFile); } catch { /* raced */ }
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for Studio page build lock: ${lockFile}`, { cause: e });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    try { fs.unlinkSync(lockFile); } catch { /* already removed */ }
+  }
+}
+
 /**
  * The page, built: from a source checkout, Vite builds it again when anything it is built from is newer than the
  * build; a packaged studio ships it built and skips rebuilding.
@@ -262,23 +370,13 @@ export async function buildPage(): Promise<void> {
   if (BUNDLED) return;
   while (pageBuild) await pageBuild;
   const studio = STUDIO_ROOT;
-  const built = fs.statSync(path.join(PUBLIC, "index.html"), { throwIfNoEntry: false })?.mtimeMs ?? 0;
-  const newest = (dir: string): number => fs.readdirSync(dir, { withFileTypes: true }).reduce((n, e) => e.name === "node_modules" ? n
-    : Math.max(n, e.isDirectory() ? newest(path.join(dir, e.name)) : fs.statSync(path.join(dir, e.name)).mtimeMs), 0);
-  const uiEntry = resolveWorkspaceInput("@repo/ui");
-  const tokensEntry = resolveWorkspaceInput("@repo/design-system/tokens.json");
-  const inputs = [
-    path.join(studio, "src"),
-    path.join(studio, "gen"),
-    path.join(studio, "vite.config.ts"),
-    path.join(TOOLS, "design"),
-    ...(uiEntry ? [path.dirname(uiEntry)] : []),
-    ...(tokensEntry ? [tokensEntry] : []),
-  ].filter((f) => fs.existsSync(f));
-  if (built > 0 && inputs.every((f) => (fs.statSync(f).isDirectory() ? newest(f) : fs.statSync(f).mtimeMs) < built)) return;
-  const viteSpecifier = "vite";
-  pageBuild = (import(viteSpecifier) as Promise<{ build(config: { configFile: string }): Promise<unknown> }>)
-    .then(({ build }) => build({ configFile: path.join(studio, "vite.config.ts") }));
+  if (pageIsFresh(studio)) return;
+  pageBuild = withPageBuildLock(studio, async () => {
+    if (pageIsFresh(studio)) return;
+    const viteSpecifier = "vite";
+    const { build } = (await import(viteSpecifier)) as { build(config: { configFile: string }): Promise<unknown> };
+    await build({ configFile: path.join(studio, "vite.config.ts") });
+  });
   try {
     await pageBuild;
   } finally {

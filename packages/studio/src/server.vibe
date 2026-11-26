@@ -115,6 +115,23 @@ effect function handleReadOnlyPost(root: string, route: string, body: any) {
   return undefined
 }
 
+const LOG_LIMIT = 400
+function appendLog(job: Job, line: string) {
+  job.log.push(line)
+  if (job.log.length > LOG_LIMIT) job.log.splice(0, job.log.length - LOG_LIMIT)
+}
+function readAppMeta(root: string) {
+  let script: string | undefined
+  let canBuild: boolean
+  try { script = appScript(root) } catch { script = undefined }
+  try { canBuild = buildable(root) } catch { canBuild = false }
+  return { script, buildable: canBuild }
+}
+const sseFrame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+const viewJobs = (jobs: Partial<Record<Kind, Job>>): Partial<Record<Kind, JobView>> =>
+  Object.fromEntries(Object.entries(jobs).map(([kind, { fiber: _fiber, ...j }]) => [kind, { ...j, log: [...j.log] }]))
+const parseJsonLine = (text: string): any => { try { return JSON.parse(text) } catch { return undefined } }
+
 /** One project's studio: its session, its jobs, and the HTTP handler its page talks to. Lives as long as the scope. */
 effect function studio(project: Project, agents: Record<string, Agent>, tree: ProjectTree) {
   const { root } = project
@@ -138,7 +155,7 @@ effect function studio(project: Project, agents: Record<string, Agent>, tree: Pr
   const lock = try Semaphore.make(1)
   const changed = PubSub.publish(ticks, undefined)
   const running = () => Object.values(jobs).find((j) => j.status === "running")
-  const failed = (job: Job, e: unknown) => { job.status = "failed"; job.log.push(`✗ ${messageOf(e)}`) }
+  const failed = (job: Job, e: unknown) => { job.status = "failed"; appendLog(job, `✗ ${messageOf(e)}`) }
 
   /** The session moves only by an event it allows; refused, the page hears why. */
   effect function act(event: Event): Session!Refused {
@@ -151,23 +168,29 @@ effect function studio(project: Project, agents: Record<string, Agent>, tree: Pr
 
   const spawned = try makeSpawner(root)
 
+  let appMeta = readAppMeta(root)
+  const refreshAppMeta = () => { appMeta = readAppMeta(root) }
+
   /** Run the program behind the job the session has just started; `done` hears how it ended, unless it was stopped. */
   effect function run(kind: Kind, label: string, command: [string, string[]], input: string | undefined, read: (line: string) => string | undefined, done: (job: Job, out: string) => void!unknown) {
     const job: Job = { label, status: "running", started: Date.now(), log: [] }
     jobs[kind] = job
-    const out: string[] = []
+    let lastOut = ""
     job.fiber = try Effect.forkIn(effect {
       const code = spawned(command, (line, std) => effect {
-        if (std) out.push(line)
+        if (std && line.trim()) lastOut = line
         const shown = read(line)
-        if (shown?.trim()) { job.log.push(shown); try changed }
+        if (shown?.trim()) { appendLog(job, shown); try changed }
       }, { input }) catch (e) => {
-        job.log.push(`✗ ${messageOf(e)}`)
+        appendLog(job, `✗ ${messageOf(e)}`)
         return -1
       }
-      job.finished = Date.now()
-      job.status = code === 0 ? "passed" : "failed"
-      lock.withPermits(1)(done(job, out.join("\n"))) catch (e) => failed(job, e)
+      try lock.withPermits(1)(effect {
+        if (jobs[kind] !== job || job.status !== "running") return
+        job.finished = Date.now()
+        job.status = code === 0 ? "passed" : "failed"
+        done(job, lastOut) catch (e) => failed(job, e)
+      })
       try changed
     }, scope)
     try changed
@@ -177,11 +200,13 @@ effect function studio(project: Project, agents: Record<string, Agent>, tree: Pr
    * The project's app, beside whatever job runs (spec/index.md, "Story: Preview the app"): the session says whether it
    * runs; this holds its process, what it printed, and where it serves.
    */
-  const app: { url?: string; log: string[]; fiber?: Fiber.Fiber<void> } = { log: [] }
+  const app: { url?: string; log: string[]; fiber?: Fiber.Fiber<void>; runId: number } = { log: [], runId: 0 }
   effect function startApp() {
-    const script = appScript(root)
+    refreshAppMeta()
+    const { script } = appMeta
     if (!script) throw new Refused({ status: 404, message: "the project has no app to run: give its package.json a start or dev script" })
     try act({ type: "preview" })
+    const runId = ++app.runId
     app.url = undefined
     app.log = []
     app.fiber = try Effect.forkIn(effect {
@@ -189,14 +214,17 @@ effect function studio(project: Project, agents: Record<string, Agent>, tree: Pr
         app.url ??= servedAt(line)
         if (line.trim()) app.log = [...app.log.slice(-199), line]
         try changed
-      }, { env: { BROWSER: "none" } }) catch (e) => { app.log = [...app.log, `✗ ${messageOf(e)}`] }
+      }, { env: { BROWSER: "none" } }) catch (e) => { app.log = [...app.log.slice(-199), `✗ ${messageOf(e)}`] }
       // An app that stops by itself is no longer running.
-      act({ type: "endPreview" }) catch () => undefined
+      try lock.withPermits(1)(effect {
+        if (app.runId === runId) act({ type: "endPreview" }) catch () => undefined
+      })
       try changed
     }, scope)
   }
   effect function stopApp() {
     try act({ type: "endPreview" })
+    app.runId++
     if (app.fiber) try Fiber.interrupt(app.fiber)
     try changed
   }
@@ -209,17 +237,15 @@ effect function studio(project: Project, agents: Record<string, Agent>, tree: Pr
     const now: Check = { results: [] }
     check = now
     lastHeard = specStamp(root)
-    const line = (text: string): any => { try { return JSON.parse(text) } catch { return undefined } }
     try run("check", "check", specCommand(root, ["check", "--json"]), undefined, (text) => {
-      const result = line(text)
-      // What is not JSON, such as a crash on standard error, is shown as it is.
+      const result = parseJsonLine(text)
       if (!result?.stage) return result ? undefined : text
       now.results.push(result)
       return `${result.stage === "skipped" ? "-" : result.ok ? "✓" : "✗"} ${result.stage} ${result.summary}`
     }, (job, out) => effect {
-      const found: Check | undefined = line(out.trimEnd().split("\n").at(-1) ?? "")
+      const found: Check | undefined = parseJsonLine(out)
       if (found?.next !== undefined) check = { ...found, finished: Date.now() }
-      job.log.push(found?.next ?? "the check did not finish")
+      appendLog(job, found?.next ?? "the check did not finish")
       const verdict = check?.finished ? verdictOf(check.results) : "Failing"
       job.status = verdict === "Failing" ? "failed" : "passed"
       try act({ type: "checked", verdict })
@@ -245,10 +271,10 @@ effect function studio(project: Project, agents: Record<string, Agent>, tree: Pr
       link: a.link?.({ root, prompt: promptFor(read.manifest, context, DEEPLINK_LIMIT) }),
     })
     const current = try lock.withPermits(1)(effect { return { session: try session.get(), heard: specStamp(root) === lastHeard } })
-    return { project, ...current, ...read, prompt: promptFor(read.manifest, context), check, jobs: jobsView(), agents: shown,
-      app: { script: appScript(root), url: app.url, log: app.log, buildable: buildable(root) } }
+    refreshAppMeta()
+    return { project, ...current, ...read, prompt: promptFor(read.manifest, context), check, jobs: viewJobs(jobs), agents: shown,
+      app: { script: appMeta.script, url: app.url, log: app.log, buildable: appMeta.buildable } }
   }
-  const jobsView = (): Partial<Record<Kind, JobView>> => Object.fromEntries(Object.entries(jobs).map(([kind, { fiber: _fiber, ...j }]) => [kind, { ...j, log: j.log.slice(-400) }]))
 
   effect function publish(body: Publish) {
     // The request carries edits, so the session as the page sees it has some (spec/index.md, "Only edits can be published, and not while a job runs").
@@ -297,7 +323,7 @@ effect function studio(project: Project, agents: Record<string, Agent>, tree: Pr
             try files.writeFileString(path.join(root, f), owned[f])
           }
         }
-        if (changedFiles.length) { job.status = "failed"; job.log.push(`✗ the agent changed, and Studio put back, ${changedFiles.join(", ")}: not marked synced`) }
+        if (changedFiles.length) { job.status = "failed"; appendLog(job, `✗ the agent changed, and Studio put back, ${changedFiles.join(", ")}: not marked synced`) }
         if (job.status === "passed") try clearManifest
       } catch (e) => failed(job, e)
       const ok = job.status === "passed"
@@ -370,21 +396,18 @@ effect function studio(project: Project, agents: Record<string, Agent>, tree: Pr
     })) catch () => undefined
   }, scope)
 
-  const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
   /** What a page hears: its job's progress, a little at a time, and when the specs change. */
   const events = Stream.encodeText(Stream.concat(Stream.make(": studio\n\n"), Stream.merge(
     Stream.mapEffect(Stream.debounce(Stream.merge(Stream.fromPubSub(ticks), Stream.map(session.changes, () => undefined)), "100 millis"),
       () => effect {
-        const script = effect { return appScript(root) } catch () => undefined
-        const canBuild = effect { return buildable(root) } catch () => false
-        return frame("job", { session: try session.get(), jobs: jobsView(), check, app: { script, url: app.url, log: app.log, buildable: canBuild } })
+        return sseFrame("job", { session: try session.get(), jobs: viewJobs(jobs), check, app: { script: appMeta.script, url: app.url, log: app.log, buildable: appMeta.buildable } })
       }),
-    Stream.map(Stream.fromPubSub(touched), () => frame("files", {})))))
+    Stream.map(Stream.fromPubSub(touched), () => sseFrame("files", {})))))
 
   return {
     snapshot,
     /** A request for this project, past the guards every request meets. */
-    handle: effect (method: string, route: string, request: HttpServerRequest.HttpServerRequest) => {
+    handle: effect (method: string, route: string, request: HttpServerRequest.HttpServerRequest, allowedOrigins: readonly string[]) => {
       if (route === "/api/events") return HttpServerResponse.stream(events, { contentType: "text/event-stream", headers: { "cache-control": "no-store", connection: "keep-alive" } })
       if (method === "GET" && route === "/api/project") return json(200, try snapshot())
       // The Components view (./page/Components.tsx): absent when the project has no catalog.
@@ -394,7 +417,7 @@ effect function studio(project: Project, agents: Record<string, Agent>, tree: Pr
         return json(200, index)
       }
       if (method === "GET" && route === "/api/preview") {
-        return json(200, try tryPromise({ try: () => studioPreview(root), catch: (e) => new Refused({ status: 500, message: messageOf(e) }) }))
+        return json(200, try tryPromise({ try: () => studioPreview(root, allowedOrigins), catch: (e) => new Refused({ status: 500, message: messageOf(e) }) }))
       }
       if (method !== "POST") throw new Refused({ status: 405, message: "method not allowed" })
       const body = try parseJsonBody(request)
@@ -412,6 +435,7 @@ export effect function startStudio({ projects, open = projects[0].id, port = 432
   const files = try FileSystem.FileSystem
   const path = try Path.Path
   try tryPromise({ try: () => buildPage(), catch: (e) => new Refused({ status: 500, message: `the page did not build: ${messageOf(e)}` }) })
+  const publicRoot = try files.realPath(PUBLIC)
 
   let server: Effect.Success<ReturnType<typeof NodeHttpServer.make>> | undefined
   for (let p = port; !server; p++) {
@@ -422,6 +446,7 @@ export effect function startStudio({ projects, open = projects[0].id, port = 432
   }
   const at = "port" in server.address ? server.address.port : port
   const hosts = [`localhost:${at}`, `127.0.0.1:${at}`]
+  const allowedOrigins = hosts.map((h) => `http://${h}`)
 
   const app = effect {
     const request = try HttpServerRequest.HttpServerRequest
@@ -433,15 +458,16 @@ export effect function startStudio({ projects, open = projects[0].id, port = 432
       if (request.headers["sec-fetch-site"] === "cross-site") throw new Refused({ status: 403, message: "cross-site requests are not allowed" })
       const url = new URL(request.url, `http://${host}`)
       if (request.method === "GET" && !url.pathname.startsWith("/api/")) {
-        const file = path.join(PUBLIC, url.pathname === "/" ? "index.html" : path.normalize(url.pathname).replace(/^([/\\])+/, ""))
-        const kind = files.stat(file) catch () => undefined
-        if (!file.startsWith(PUBLIC) || kind?.type !== "File") throw new Refused({ status: 404, message: "not found" })
-        return HttpServerResponse.uint8Array(try files.readFile(file), { contentType: TYPES[path.extname(file)] ?? "application/octet-stream", headers: { "cache-control": "no-store" } })
+        const file = path.join(publicRoot, url.pathname === "/" ? "index.html" : path.normalize(url.pathname).replace(/^([/\\])+/, ""))
+        const resolved = files.realPath(file) catch () => undefined
+        const kind = resolved ? (files.stat(resolved) catch () => undefined) : undefined
+        if (!resolved || !resolved.startsWith(publicRoot + path.sep) || kind?.type !== "File") throw new Refused({ status: 404, message: "not found" })
+        return HttpServerResponse.uint8Array(try files.readFile(resolved), { contentType: TYPES[path.extname(resolved)] ?? "application/octet-stream", headers: { "cache-control": "no-store" } })
       }
       if (url.pathname === "/api/projects") return json(200, { projects: projects.map(({ id, name }) => ({ id, name })), open })
       const live = lives.get(url.searchParams.get("project") ?? open)
       if (!live) throw new Refused({ status: 404, message: "no such project" })
-      return try live.handle(request.method, url.pathname, request)
+      return try live.handle(request.method, url.pathname, request, allowedOrigins)
     } catch (e) => json(e instanceof Refused ? e.status : 400, e instanceof Refused && e.conflicts ? { error: e.message, conflicts: e.conflicts } : { error: messageOf(e) })
     return HttpServerResponse.setHeaders(response, {
       "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self' http://localhost:* http://127.0.0.1:*; connect-src 'self' http://localhost:* http://127.0.0.1:*; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
