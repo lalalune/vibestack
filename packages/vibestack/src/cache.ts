@@ -117,6 +117,7 @@ type Check = {
   installation?: DafnyInstall | { at: string; files?: undefined };
   programs: Map<string, Program | undefined>;
   evaluators: Map<string, Evaluator>;
+  cacheDirs: Map<string, string>;
   pending: Map<string, Buffer>;
   pendingDafny: Map<string, Buffer>;
   verify: Set<Pick<Program, "unchanged">>;
@@ -214,8 +215,10 @@ function installation(): DafnyInstall | { at: string; files?: undefined } {
       const stamps = new Map<string, string>();
       try {
         for (const file of files) stamps.set(file, formatStamp(fs.statSync(file, { bigint: true })));
+        const parsedStamps = parseStamps(stamps);
+        const parsedLayout = parseStamps(layout);
         return { launchers, assemblies, runtime, trees, files, stamps, at: JSON.stringify([...layout, ...stamps]),
-          unchanged: () => findDafny() === launcher && sameFiles(stamps, layout) };
+          unchanged: () => findDafny() === launcher && sameParsed(parsedStamps, true) && sameParsed(parsedLayout, false) };
       } catch (e) {
         return { at: (e as Error).message };
       }
@@ -228,7 +231,7 @@ function installation(): DafnyInstall | { at: string; files?: undefined } {
 }
 /** Run a check, which reads Dafny's installation once: its final certification checks that installation even after a wholly warm run. */
 export const steady = <T>(run: () => Promise<T>) => {
-  const check: Check = { programs: new Map(), evaluators: new Map(), pending: new Map(), pendingDafny: new Map(), verify: new Set(), touched: new Set(), bytes: 0, dafnyBytes: 0, lastPublished: -Infinity };
+  const check: Check = { programs: new Map(), evaluators: new Map(), cacheDirs: new Map(), pending: new Map(), pendingDafny: new Map(), verify: new Set(), touched: new Set(), bytes: 0, dafnyBytes: 0, lastPublished: -Infinity };
   return checking.run(check, async () => {
     try {
       const result = await run();
@@ -240,6 +243,14 @@ export const steady = <T>(run: () => Promise<T>) => {
     }
   });
 };
+
+export async function withStableInstallation<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let retries = 0; ; retries++) {
+    try { return await steady(attempt); } catch (error) {
+      if (!(error instanceof InstallationChanged) || retries === 2) throw error;
+    }
+  }
+}
 
 function perCheck<T>(read: () => Promise<T>): () => Promise<T> {
   const known = new WeakMap<Check, Promise<T>>();
@@ -257,7 +268,7 @@ const packageName = (name: string) => /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z
 const NODE_FLAGS = ["NODE_OPTIONS", "NODE_PRESERVE_SYMLINKS", "NODE_PRESERVE_SYMLINKS_MAIN"] as const;
 const nodeFlags = () => JSON.stringify(NODE_FLAGS.map((name) => process.env[name] ?? ""));
 type Isolated = { entry: string; script: string };
-type Program = { exe: string; unchanged: () => boolean } & ({ id: string; isolated: Isolated } | { id: undefined; isolated?: never });
+type Program = { exe: string; unchanged: () => boolean; verifyIsolated?: () => boolean } & ({ id: string; isolated: Isolated } | { id: undefined; isolated?: never });
 const latest = new Map<string, Program>();
 
 function virtualStore(dir: string): string | undefined {
@@ -381,6 +392,7 @@ function launcherInputs(exe: string, packageDir: string, exists: (file: string) 
 }
 
 type Stamps = Iterable<readonly [string, string]>;
+type ParsedStamp = readonly [file: string, empty: boolean, dev: bigint, ino: bigint, size: bigint, mtimeNs: bigint, ctimeNs: bigint];
 const fileStamp = (file: string, follow = true) => {
   try {
     const stat = (follow ? fs.statSync : fs.lstatSync)(file, { bigint: true, throwIfNoEntry: false });
@@ -389,24 +401,52 @@ const fileStamp = (file: string, follow = true) => {
     return "";
   }
 };
-const sameFiles = (files: Stamps, links: Stamps) => {
-  for (const [file, expected] of files) if (fileStamp(file, true) !== expected) return false;
-  for (const [file, expected] of links) if (fileStamp(file, false) !== expected) return false;
+function parseStamps(entries: Stamps): ParsedStamp[] {
+  const out: ParsedStamp[] = [];
+  for (const [file, expected] of entries) {
+    if (!expected) {
+      out.push([file, true, 0n, 0n, 0n, 0n, 0n]);
+      continue;
+    }
+    const parts = expected.split(":");
+    if (parts.length !== 5) out.push([file, false, -1n, -1n, -1n, -1n, -1n]);
+    else out.push([file, false, BigInt(parts[0]), BigInt(parts[1]), BigInt(parts[2]), BigInt(parts[3]), BigInt(parts[4])]);
+  }
+  return out;
+}
+function sameParsed(entries: readonly ParsedStamp[], follow: boolean): boolean {
+  const statFn = follow ? fs.statSync : fs.lstatSync;
+  for (let i = 0; i < entries.length; i++) {
+    const [file, empty, dev, ino, size, mtimeNs, ctimeNs] = entries[i];
+    let stat: fs.BigIntStats | undefined;
+    try { stat = statFn(file, { bigint: true, throwIfNoEntry: false }); } catch { stat = undefined; }
+    if (empty) { if (stat !== undefined) return false; }
+    else if (!stat || stat.dev !== dev || stat.ino !== ino || stat.size !== size || stat.mtimeNs !== mtimeNs || stat.ctimeNs !== ctimeNs) return false;
+  }
   return true;
-};
+}
+const sameFiles = (files: Stamps, links: Stamps) => sameParsed(parseStamps(files), true) && sameParsed(parseStamps(links), false);
 const isStamps = (value: unknown): value is [string, string][] => Array.isArray(value) && value.every((entry) =>
   Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && typeof entry[1] === "string");
 
-function readProgram(index: string, key: string): { id: string; isolated: Isolated; unchanged: () => boolean } | undefined {
+function readProgram(index: string, key: string): { id: string; isolated: Isolated; unchangedSource: () => boolean; unchangedIsolated: () => boolean } | undefined {
   try {
     const data: unknown = JSON.parse(zstdDecompressSync(fs.readFileSync(index)).toString("utf8"));
     if (!Array.isArray(data)) return undefined;
-    const [saved, id, files, links, isolated] = data;
-    if (saved !== key || typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id) || !isStamps(files) || !files.length || !isStamps(links)) return undefined;
+    const [saved, id, sourceFiles, sourceLinks, isolated, isolatedFiles, isolatedLinks] = data;
+    if (saved !== key || typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id) || !isStamps(sourceFiles) || !sourceFiles.length || !isStamps(sourceLinks)) return undefined;
+    if (!isStamps(isolatedFiles) || !isStamps(isolatedLinks)) return undefined;
+    const programsRoot = path.join(path.dirname(LASTING), "programs") + path.sep;
     if (typeof isolated !== "object" || !isolated || typeof isolated.entry !== "string" || typeof isolated.script !== "string"
-      || ![isolated.entry, isolated.script].every((file) => file.startsWith(path.join(path.dirname(LASTING), "programs") + path.sep) && files.some(([observed]) => observed === file))) return undefined;
-    const unchanged = () => sameFiles(files, links);
-    if (unchanged()) return { id, isolated: { entry: isolated.entry, script: isolated.script }, unchanged };
+      || ![isolated.entry, isolated.script].every((file) => file.startsWith(programsRoot) && isolatedFiles.some(([observed]) => observed === file))) return undefined;
+    const parsedSourceFiles = parseStamps(sourceFiles);
+    const parsedSourceLinks = parseStamps(sourceLinks);
+    const unchangedSource = () => sameParsed(parsedSourceFiles, true) && sameParsed(parsedSourceLinks, false);
+    if (!unchangedSource() || !fs.existsSync(isolated.entry) || !fs.existsSync(isolated.script)) return undefined;
+    let parsedIsolatedFiles: ParsedStamp[] | undefined;
+    let parsedIsolatedLinks: ParsedStamp[] | undefined;
+    const unchangedIsolated = () => sameParsed(parsedIsolatedFiles ??= parseStamps(isolatedFiles), true) && sameParsed(parsedIsolatedLinks ??= parseStamps(isolatedLinks), false);
+    return { id, isolated: { entry: isolated.entry, script: isolated.script }, unchangedSource, unchangedIsolated };
   } catch {
     return undefined;
   }
@@ -574,6 +614,7 @@ export const installedPackages = (exe: string, name: string) => packageGraph(exe
 
 const MAX_LATEST_PROGRAMS = 8;
 const MAX_CACHED_VIEWS = 8;
+const MAX_CACHED_INSTALLATIONS = 24;
 let prunedViews = false;
 
 function resolvedNodeForShim(exe: string): string {
@@ -633,6 +674,7 @@ function prunePrograms(programsDir: string, keepViews: ReadonlySet<string>, cach
 }
 
 let programSource: string | undefined;
+const programMeta = new WeakMap<Program, { index: string; latestKey: string; unchangedSource: () => boolean }>();
 export function installedProgram(root: string, tool: keyof typeof TOOL_PACKAGES): Program | undefined {
   const scope = checking.getStore();
   const key = `${tool}\0${path.resolve(root)}`;
@@ -649,12 +691,12 @@ export function installedProgram(root: string, tool: keyof typeof TOOL_PACKAGES)
     const commandPath = process.env.PATH;
     const resolvedNode = resolvedNodeForShim(exe);
     const nodeOptions = nodeFlags();
-    const indexKey = sha(programSource ??= code(closure("cache")), import.meta.dirname, path.resolve(exe), searchPath ?? "", resolvedNode, nodeOptions ?? "", process.execPath, process.version, process.platform, process.arch);
+    const indexKey = sha("install-v2", programSource ??= code([`cache${ext}`, `installed${ext}`, `run${ext}`]), import.meta.dirname, path.resolve(exe), searchPath ?? "", resolvedNode, nodeOptions ?? "", process.execPath, process.version, process.platform, process.arch);
     const name = `installed-${indexKey.slice(0, 24)}.json.zst`;
     const cacheDir = path.dirname(LASTING);
     const directory = path.join(cacheDir, "installations");
     const index = path.join(directory, name);
-    let installed: { id: string; isolated: Isolated; unchanged: () => boolean } | undefined = unsure || previous ? undefined : readProgram(index, indexKey);
+    let installed: { id: string; isolated: Isolated; unchangedSource: () => boolean; unchangedIsolated: () => boolean } | undefined = isUnsure() || previous ? undefined : readProgram(index, indexKey);
     const rememberLatest = (entry: Program) => {
       if (!latest.has(latestKey) && latest.size >= MAX_LATEST_PROGRAMS) latest.delete(latest.keys().next().value!);
       latest.delete(latestKey);
@@ -670,7 +712,7 @@ export function installedProgram(root: string, tool: keyof typeof TOOL_PACKAGES)
       if (prunedViews) return;
       prunedViews = true;
       try {
-        pruneCache(directory, new Set([name]), (file) => /^installed-[a-f0-9]{24}\.json\.zst$/.test(file));
+        pruneCache(directory, new Set([name]), (file) => /^installed-[a-f0-9]{24}\.json\.zst$/.test(file), MAX_CACHED_INSTALLATIONS);
         prunePrograms(path.join(cacheDir, "programs", "1"), keepViews, cacheDir);
       } catch { /* optional cache cleanup */ }
     };
@@ -681,30 +723,77 @@ export function installedProgram(root: string, tool: keyof typeof TOOL_PACKAGES)
         const launcher = launcherInputs(exe, main, observeLocation);
         if (launcher) {
           const expected = graph.map(({ dir }) => contents(dir));
+          const sourceFilesSnapshot: [string, string][] = [...files];
+          const sourceLinksSnapshot: [string, string][] = [...links];
+          const sourceFileKeys = new Set(sourceFilesSnapshot.map(([f]) => f));
+          const sourceLinkKeys = new Set(sourceLinksSnapshot.map(([f]) => f));
           const id = sha(launcher.digest, JSON.stringify([roots, graph.map(({ version, dependencies }, index) => [version, expected[index], dependencies])]), `node@${process.versions.node}:${process.platform}:${process.arch}`);
           const isolated = isolate(id, launcher.entry, expected);
-          installed = { id, isolated, unchanged };
-          if (!unsure) {
+          const isolatedFiles = [...files].filter(([f]) => !sourceFileKeys.has(f));
+          const isolatedLinks = [...links].filter(([f]) => !sourceLinkKeys.has(f));
+          const parsedSourceFiles = parseStamps(sourceFilesSnapshot);
+          const parsedSourceLinks = parseStamps(sourceLinksSnapshot);
+          const parsedIsolatedFiles = parseStamps(isolatedFiles);
+          const parsedIsolatedLinks = parseStamps(isolatedLinks);
+          installed = {
+            id,
+            isolated,
+            unchangedSource: () => sameParsed(parsedSourceFiles, true) && sameParsed(parsedSourceLinks, false),
+            unchangedIsolated: () => sameParsed(parsedIsolatedFiles, true) && sameParsed(parsedIsolatedLinks, false),
+          };
+          if (!isUnsure()) {
             try {
-              writeWhole(index, zstdCompressSync(JSON.stringify([indexKey, id, [...files], [...links], isolated])));
-              prunedViews = false;
+              writeWhole(index, zstdCompressSync(JSON.stringify([indexKey, id, sourceFilesSnapshot, sourceLinksSnapshot, isolated, isolatedFiles, isolatedLinks])));
               cleanup(isolated);
             } catch { /* optional cache */ }
           }
         }
       } catch (error) { if (error instanceof InstallationChanged) throw error; }
-      const stable = () => process.env.NODE_PATH === searchPath && nodeFlags() === nodeOptions
-        && (installed ? resolvedNodeForShim(exe) === resolvedNode : process.env.PATH === commandPath) && unchanged();
-      previous = rememberLatest(installed ? { exe, ...installed, unchanged: stable } : { exe, id: undefined, unchanged: stable });
+      if (installed) {
+        let isolatedChecked = false;
+        const { unchangedSource, unchangedIsolated } = installed;
+        const stable = () => process.env.NODE_PATH === searchPath && nodeFlags() === nodeOptions && resolvedNodeForShim(exe) === resolvedNode
+          && unchangedSource() && (!isolatedChecked || unchangedIsolated());
+        const verifyIsolated = () => { isolatedChecked = true; return unchangedIsolated(); };
+        previous = rememberLatest({ exe, id: installed.id, isolated: installed.isolated, unchanged: stable, verifyIsolated });
+        programMeta.set(previous, { index, latestKey, unchangedSource });
+      } else {
+        const stable = () => process.env.NODE_PATH === searchPath && nodeFlags() === nodeOptions && process.env.PATH === commandPath && unchanged();
+        previous = rememberLatest({ exe, id: undefined, unchanged: stable });
+      }
     } else {
       cleanup(installed.isolated);
-      const stable = installed.unchanged;
-      previous = rememberLatest({ exe, ...installed, unchanged: () => process.env.NODE_PATH === searchPath && resolvedNodeForShim(exe) === resolvedNode && nodeFlags() === nodeOptions && stable() });
+      let isolatedChecked = false;
+      const { unchangedSource, unchangedIsolated } = installed;
+      const verifyIsolated = () => { isolatedChecked = true; return unchangedIsolated(); };
+      previous = rememberLatest({
+        exe,
+        id: installed.id,
+        isolated: installed.isolated,
+        unchanged: () => process.env.NODE_PATH === searchPath && resolvedNodeForShim(exe) === resolvedNode && nodeFlags() === nodeOptions
+          && unchangedSource() && (!isolatedChecked || unchangedIsolated()),
+        verifyIsolated,
+      });
+      programMeta.set(previous, { index, latestKey, unchangedSource });
     }
   }
   const program: Program = { ...previous, unchanged: () => findBin(tool, root) === exe && previous.unchanged() };
+  const meta = programMeta.get(previous);
+  if (meta) programMeta.set(program, meta);
   scope?.programs.set(key, program);
   return program;
+}
+
+export function recoverIsolatedProgram(root: string, tool: keyof typeof TOOL_PACKAGES, current: Program): Program | undefined {
+  const meta = programMeta.get(current);
+  if (!meta || findBin(tool, root) !== current.exe || !meta.unchangedSource()) {
+    stableInstallation(false);
+    throw new InstallationChanged();
+  }
+  fs.rmSync(meta.index, { force: true });
+  latest.delete(meta.latestKey);
+  checking.getStore()?.programs.delete(`${tool}\0${path.resolve(root)}`);
+  return installedProgram(root, tool);
 }
 
 export function evaluatorForCheck(root: string): Evaluator | undefined {
@@ -739,7 +828,7 @@ function perDafny<T>(read: (inst: DafnyInstall | undefined) => Promise<T>, kept:
 
 async function readDafnyVersion(inst: DafnyInstall | undefined): Promise<{ version?: string; problem?: string }> {
   try {
-    const installed = inst && lasting(`dafny --version ${inst.files[0]}`, inst.files, inst.files.map((f) => inst.stamps.get(f)!).join(" "));
+    const installed = inst && lasting(`dafny --version ${inst.files[0]}`, [inst.files[0]], sha(...inst.files.map((f) => inst.stamps.get(f)!)));
     if (installed?.value) return dafnySaid(installed.value);
     const r = await exec(inst?.launchers[0] ?? findDafny() ?? "dafny", ["--version"], process.cwd());
     const version = r.status === 0 ? r.stdout.match(/\d+\.\d+\.\d+/)?.[0] : undefined;
@@ -859,10 +948,13 @@ const TOOL_DIRS = ["", "gen", "testing", "stories", "design"];
  */
 function loadTools() {
   const tools = new Map<string, { code: string; imports: string[] }>();
+  let unsure = false;
   const load = (f: string) => {
     if (tools.has(f)) return;
     const file = path.join(import.meta.dirname, f);
-    const { value, keep } = lasting(`tool-meta ${file}`, [file]);
+    const stat = fs.statSync(file, { bigint: true });
+    if (Number(stat.ctimeNs) / 1e6 >= performance.timeOrigin) unsure = true;
+    const { value, keep } = lasting(`tool-meta ${file}`, [file], formatStamp(stat));
     if (value !== undefined) {
       try {
         const parsed: unknown = JSON.parse(value);
@@ -881,17 +973,16 @@ function loadTools() {
     tools.set(f, { code: codeHash, imports });
     imports.forEach(load);
   };
-  TOOL_DIRS.flatMap((dir) => fs.readdirSync(path.join(import.meta.dirname, dir)).map((f) => path.join(dir, f)))
-    .filter((f) => f.endsWith(ext) && f !== `selftest${ext}` && f !== `remote-cache${ext}`).sort().forEach(load);
-  /**
-   * Whether a tool, or the set of them, changed between the start of this process and the reading above: then the code it
-   * runs may not be the code its keys name, and it remembers nothing. The change time, which a copy or an archive cannot
-   * set back, never the modification time.
-   */
-  const unsure = [...TOOL_DIRS, ...tools.keys()].some((f) => fs.statSync(path.join(import.meta.dirname, f)).ctimeMs >= performance.timeOrigin);
+  for (const dir of TOOL_DIRS) {
+    const full = path.join(import.meta.dirname, dir);
+    if (fs.statSync(full).ctimeMs >= performance.timeOrigin) unsure = true;
+    for (const f of fs.readdirSync(full).map((name) => path.join(dir, name))
+      .filter((name) => name.endsWith(ext) && name !== `selftest${ext}` && name !== `remote-cache${ext}`).sort()) load(f);
+  }
   return { tools, unsure };
 }
 const { tools, unsure } = loadTools();
+const isUnsure = () => unsure;
 /** The code of these scripts, by their names and tokens. */
 const code = (files: string[]) => sha(...files.sort().map((f) => `${f}\0${tools.get(f)?.code}`)).slice(0, 12);
 /** Every tool's script, where it is: a page that runs one of them may run any (explore.ts, `pageInputs`). */
@@ -958,6 +1049,7 @@ export interface Memory {
   root: string;
   fresh: boolean;
   used: Set<string>;
+  wrote?: boolean;
   actionSignal?: AbortSignal;
   actionProjection?: { version: string; encode: (value: unknown) => unknown };
   /** Actual receipt bytes, including writes pending installation certification. */
@@ -967,7 +1059,16 @@ export interface Memory {
 interface Entry { name: string; file: string; reusable: boolean; evaluator?: Evaluator }
 const formats = [["zst", zstdDecompressSync], ["gz", gunzipSync]] as const;
 const primaryExtension = `.${formats[0][0]}`;
-const localCache = (root: string) => cacheDirectory(root);
+const localCache = (root: string) => {
+  const scope = checking.getStore();
+  if (!scope) return cacheDirectory(root);
+  let dir = scope.cacheDirs.get(root);
+  if (dir === undefined) {
+    dir = cacheDirectory(root);
+    scope.cacheDirs.set(root, dir);
+  }
+  return dir;
+};
 const formalCache = new AsyncLocalStorage<{ directory: string; used: Set<string> }>();
 const sharedCache = (name: string) => isActionEntry(name) ? formalCache.getStore() : undefined;
 const cacheFile = (root: string, name: string) => path.join(sharedCache(name)?.directory ?? localCache(root), name);
@@ -998,7 +1099,10 @@ function use(memory: Memory, name: string) {
   if (check?.touched.has(file) || seen.has(file)) return;
   check?.touched.add(file);
   seen.add(file);
-  try { const now = new Date(); fs.utimesSync(file, now, now); } catch { /* still a hit */ }
+  try {
+    const now = new Date();
+    fs.utimesSync(file, now, now);
+  } catch { /* still a hit */ }
 }
 function projectedEntry(memory: Memory, at: Entry): Entry | undefined {
   if (!memory.actionProjection || !isActionEntry(at.name)) return undefined;
@@ -1050,17 +1154,28 @@ export function store(memory: Memory, raw: Entry, value: unknown, source?: { pro
   const projected = projectedEntry(memory, raw);
   if (!projected) memory.used.add(raw.name);
   const check = checking.getStore();
-  if (unsure || check?.changed || check?.closed || !reusable) return;
+  if (isUnsure() || check?.changed || check?.closed || !reusable) return;
   if (evaluator) {
     if (check) check.verify.add(evaluator);
     else if (!evaluator.unchanged()) return;
   }
   const action = source === "dafny" ? undefined : source;
-  if (action && !check && !action.program.unchanged()) return;
+  if (action) {
+    if (!check && !action.program.unchanged()) return;
+    if (action.program.verifyIsolated && !action.program.verifyIsolated()) {
+      if (check) {
+        check.changed = true;
+        resetPending(check);
+        throw new InstallationChanged();
+      }
+      return;
+    }
+  }
   const compact = projected && memory.actionProjection?.encode(value);
   const { name, file } = projected && compact !== undefined ? projected : raw;
   const bytes = zstdCompressSync(JSON.stringify(compact === undefined ? value : compact));
   memory.used.add(name);
+  memory.wrote = true;
   sharedCache(name)?.used.add(name);
   if (check && (source === "dafny" || /^(?:prove|tests|traces|explore)-/.test(raw.name))) {
     check.dafnyBytes += bytes.length - (check.pendingDafny.get(file)?.length ?? 0);
@@ -1079,7 +1194,8 @@ export function store(memory: Memory, raw: Entry, value: unknown, source?: { pro
     check.bytes += bytes.length - (check.pending.get(file)?.length ?? 0);
     check.pending.set(file, bytes);
     if (!action || pendingLimit(check)
-      || performance.now() - Math.min(check.lastPublished, action.began) >= PUBLISH_INTERVAL_MS) publishChecked();
+      || performance.now() - check.lastPublished >= PUBLISH_INTERVAL_MS
+      || performance.now() - action.began >= PUBLISH_INTERVAL_MS) publishChecked();
   }
   memory.captureReceipt?.({ name, bytes });
 }
@@ -1101,9 +1217,10 @@ export async function remembered<T>(memory: Memory, at: Entry | Promise<Entry>, 
     return known.result;
   }
   const compute = async () => {
-    const own: Memory = { ...memory, used: new Set() };
+    const own: Memory = { ...memory, used: new Set(), wrote: false };
     const result = await produce(own);
     for (const name of own.used) memory.used.add(name);
+    if (own.wrote) memory.wrote = true;
     if (keep(result)) store(memory, e, { result, used: [...own.used] });
     return result;
   };
@@ -1117,9 +1234,11 @@ export function collectGarbage(memory: Memory) {
   pruneCache(localCache(memory.root), memory.used);
 }
 
-function pruneCache(directory: string, inUse: ReadonlySet<string>, owns?: (name: string) => boolean) {
+function pruneCache(directory: string, inUse: ReadonlySet<string>, owns?: (name: string) => boolean, maxEntries?: number) {
   if (!fs.existsSync(directory)) return;
-  const expired = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const expired = now - 30 * 24 * 60 * 60 * 1000;
+  const recentGrace = now - 60 * 60 * 1000;
   const retained: { file: string; size: number; touched: number; used: boolean }[] = [];
   for (const name of fs.readdirSync(directory)) {
     if (name === "lock" || (owns && !owns(name))) continue;
@@ -1132,9 +1251,13 @@ function pruneCache(directory: string, inUse: ReadonlySet<string>, owns?: (name:
     else retained.push({ file, size: stat.size, touched: stat.mtimeMs, used });
   }
   let bytes = retained.reduce((total, entry) => total + entry.size, 0);
+  let count = retained.length;
   for (const entry of retained.filter((entry) => !entry.used).sort((a, b) => a.touched - b.touched || a.file.localeCompare(b.file))) {
-    if (bytes <= 256 * 2 ** 20) break;
+    const overBytes = bytes > 256 * 2 ** 20;
+    const overCount = maxEntries !== undefined && count > maxEntries && entry.touched < recentGrace;
+    if (!overBytes && !overCount) break;
     fs.rmSync(entry.file, { force: true });
     bytes -= entry.size;
+    count--;
   }
 }

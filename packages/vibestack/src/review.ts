@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type * as TS from "typescript";
+import { loadConfig } from "./config.ts";
 import { readSpecs, isStd, bareQuint as bare, heading, type Import, type Spec, type Story, type Rule } from "./parse.ts";
 import { short, readSrc, indent, writeWhole, citations, tsApi } from "./util.ts";
 import { DECLASSIFY } from "./gen/secrecy.ts";
@@ -13,22 +14,25 @@ import { DECLASSIFY } from "./gen/secrecy.ts";
  */
 export interface Accepted { text: string; unproved: string[] }
 export interface ReviewLock { version: 1; specs: Record<string, Lock>; contracts: Record<string, string>; unproved: Record<string, Accepted> }
-export const ledgerFile = (root: string) => path.join(root, "spec/lock.json");
+export const ledgerFile = (root: string) => path.join(root, loadConfig(root).spec.dir, "lock.json");
 const emptyLock = (): ReviewLock => ({ version: 1, specs: {}, contracts: {}, unproved: {} });
 export type ReviewSpec = Pick<Spec, "file" | "name" | "preamble" | "rules" | "stories" | "uses">;
 
 /** One versioned ledger owns review and proof acceptance for the entire spec tree. A check reads it once and passes it on. */
 export function readReviewLock(root: string): ReviewLock {
-  const file = ledgerFile(root);
+  const specDir = loadConfig(root).spec.dir;
+  const file = path.join(root, specDir, "lock.json");
   if (!fs.existsSync(file)) return emptyLock();
   const data = JSON.parse(fs.readFileSync(file, "utf8"));
   const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
   const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+  const specPrefix = `${specDir}/`;
+  const validSpecKey = (key: string) => key.startsWith(specPrefix) && key.endsWith(".md") && key.length > specPrefix.length + 3;
   if (!object(data) || data.version !== 1 || !object(data.specs) || !object(data.contracts) || !object(data.unproved)
-    || Object.entries(data.specs).some(([file, rules]) => !/^spec\/.+\.md$/.test(file) || !object(rules) || Object.values(rules).some((v) => !strings(v)))
+    || Object.entries(data.specs).some(([specFile, rules]) => !validSpecKey(specFile) || !object(rules) || Object.values(rules).some((v) => !strings(v)))
     || Object.values(data.contracts).some((v) => typeof v !== "string")
     || Object.values(data.unproved).some((v) => !object(v) || typeof v.text !== "string" || !strings(v.unproved)))
-    throw new Error("spec/lock.json has an unsupported version or invalid review records");
+    throw new Error(`${specDir}/lock.json has an unsupported version or invalid review records`);
   return data as unknown as ReviewLock;
 }
 
@@ -75,6 +79,25 @@ function namesOf(spec: ReviewSpec): Map<string, Rule[]> {
 /** A rule whose Quint another rule's Quint relies on, and the names it is relied on for. */
 interface Dependency { spec: ReviewSpec; rule: Rule; names: Set<string> }
 
+const mentionsCache = new WeakMap<Rule, { bare: Set<string>; qualified: [string, string][] }>();
+function ruleMentions(rule: Rule): { bare: Set<string>; qualified: [string, string][] } {
+  let found = mentionsCache.get(rule);
+  if (!found) {
+    found = mentions(rule.code);
+    mentionsCache.set(rule, found);
+  }
+  return found;
+}
+const specsByNameCache = new WeakMap<readonly ReviewSpec[], Map<string, ReviewSpec>>();
+function specsByName(specs: readonly ReviewSpec[]): Map<string, ReviewSpec> {
+  let index = specsByNameCache.get(specs);
+  if (!index) {
+    index = new Map(specs.map((spec) => [spec.name, spec]));
+    specsByNameCache.set(specs, index);
+  }
+  return index;
+}
+
 /**
  * The rules whose Quint `rule` relies on, directly or through others, in its own spec and in the specs it imports.
  * A bare name is looked up first in the spec that mentions it, then in the specs that one imports with `.*` or by that
@@ -82,13 +105,14 @@ interface Dependency { spec: ReviewSpec; rule: Rule; names: Set<string> }
  * conservative: an identifier that happens to share a definition's name counts as a use of it.
  */
 export function dependencies(spec: ReviewSpec, rule: Rule, specs: readonly ReviewSpec[]): Dependency[] {
+  const byName = specsByName(specs);
   const found = new Map<string, Dependency>();
   const homes = (from: Import[], n: string) => from.flatMap((u) => {
-    const d = specs.find((x) => x.name === u.module);
+    const d = byName.get(u.module);
     return d ? (namesOf(d).get(n) ?? []).map((x) => [d, x] as const) : [];
   });
   const visit = (s: ReviewSpec, r: Rule) => {
-    const { bare: names, qualified } = mentions(r.code);
+    const { bare: names, qualified } = ruleMentions(r);
     const unqualified = (n: string) => {
       const own = namesOf(s).get(n);
       return own ? own.map((x) => [s, x] as const) : homes(s.uses.filter((u) => u.star || u.names.includes(n)), n);
@@ -138,13 +162,17 @@ const ASKS = {
 export const showPending = (p: Pending) => `${p.where}\n      ${p.status}${p.note ?? ""}: ${ASKS[p.status]}${p.cited?.length ? `\n      cited by ${p.cited.join(", ")}: read them again against it` : ""}`;
 
 export type Lock = Record<string, string[]>;
+const loadedLocks = new WeakSet<Map<string, Lock>>();
 /** A spec's ledger. `locks` remembers the ones read, for a caller that reads many in a row while none of them changes. */
 const readLock = (root: string, file: string, locks: Map<string, Lock>): Lock => {
   const known = locks.get(file);
   if (known) return known;
-  const all = readReviewLock(root).specs;
-  for (const [file, value] of Object.entries(all)) locks.set(file, value);
-  const lock = all[file] ?? {};
+  if (!loadedLocks.has(locks)) {
+    loadedLocks.add(locks);
+    const all = readReviewLock(root).specs;
+    for (const [k, value] of Object.entries(all)) if (!locks.has(k)) locks.set(k, value);
+  }
+  const lock = locks.get(file) ?? {};
   locks.set(file, lock);
   return lock;
 };

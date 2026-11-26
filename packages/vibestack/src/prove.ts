@@ -721,26 +721,45 @@ function stepBody(gen: string, transitions: { name: string; params: string[] }[]
   return cases.every(Boolean) ? ["  hide *;", "  reveal step, inv;", "  match event {", ...cases, "  }"].join("\n") : undefined;
 }
 
+const isolatedHelperNamesCache = new Map<string, Promise<ReadonlySet<string>>>();
+const unisolatedHelperNamesCache = new WeakMap<Memory, Promise<ReadonlySet<string>>>();
+
 /** LemmaScript's own generated helpers are runtime support, not obligations the user may accept as simulated. */
-async function helperNames(root: string): Promise<ReadonlySet<string>> {
+async function helperNames(memory: Memory): Promise<ReadonlySet<string>> {
+  const { root } = memory;
   const program = installedProgram(root, "lsc");
   if (program?.isolated) {
     const file = path.join(path.dirname(program.isolated.entry), "dafny-emit.js");
-    const names = (await import(pathToFileURL(file).href)).DAFNY_HELPER_NAMES;
-    if (names instanceof Set) return names as ReadonlySet<string>;
-    throw new Error("LemmaScript's dafny-emit.js does not export DAFNY_HELPER_NAMES");
+    let pending = isolatedHelperNamesCache.get(file);
+    if (!pending) {
+      pending = import(pathToFileURL(file).href).then((mod) => {
+        const names = mod.DAFNY_HELPER_NAMES;
+        if (names instanceof Set) return names as ReadonlySet<string>;
+        throw new Error("LemmaScript's dafny-emit.js does not export DAFNY_HELPER_NAMES");
+      });
+      pending.catch(() => isolatedHelperNamesCache.delete(file));
+      isolatedHelperNamesCache.set(file, pending);
+    }
+    return pending;
   }
-  const lsc = program?.exe ?? bin("lsc", root);
-  const real = fs.realpathSync(lsc);
-  let dependency: string | undefined;
-  try { dependency = createRequire(import.meta.url).resolve("lemmascript/tools/dist/dafny-emit.js"); } catch { /* use the executable's installation below */ }
-  const file = [path.join(path.dirname(real), "dafny-emit.js"), path.join(path.dirname(lsc), "..", "lemmascript", "tools", "dist", "dafny-emit.js"), dependency].find((f): f is string => f !== undefined && fs.existsSync(f));
-  if (!file) throw new Error("LemmaScript's dafny-emit.js was not found beside lsc");
-  const { status, stdout, stderr } = await exec(process.execPath, ["--input-type=module", "-e",
-    'const names = (await import(process.argv[1])).DAFNY_HELPER_NAMES; if (names instanceof Set) process.stdout.write(JSON.stringify([...names]));', pathToFileURL(file).href], root);
-  const names: unknown = status === 0 && stdout ? JSON.parse(stdout) : undefined;
-  if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) throw new Error(stderr || "LemmaScript's dafny-emit.js does not export DAFNY_HELPER_NAMES");
-  return new Set(names);
+  let pending = unisolatedHelperNamesCache.get(memory);
+  if (!pending) {
+    const lsc = program?.exe ?? bin("lsc", root);
+    const real = fs.realpathSync(lsc);
+    let dependency: string | undefined;
+    try { dependency = createRequire(import.meta.url).resolve("lemmascript/tools/dist/dafny-emit.js"); } catch { /* use the executable's installation below */ }
+    const file = [path.join(path.dirname(real), "dafny-emit.js"), path.join(path.dirname(lsc), "..", "lemmascript", "tools", "dist", "dafny-emit.js"), dependency].find((f): f is string => f !== undefined && fs.existsSync(f));
+    if (!file) throw new Error("LemmaScript's dafny-emit.js was not found beside lsc");
+    pending = exec(process.execPath, ["--input-type=module", "-e",
+      'const names = (await import(process.argv[1])).DAFNY_HELPER_NAMES; if (names instanceof Set) process.stdout.write(JSON.stringify([...names]));', pathToFileURL(file).href], root).then(({ status, stdout, stderr }) => {
+      const names: unknown = status === 0 && stdout ? JSON.parse(stdout) : undefined;
+      if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) throw new Error(stderr || "LemmaScript's dafny-emit.js does not export DAFNY_HELPER_NAMES");
+      return new Set(names);
+    });
+    pending.catch(() => unisolatedHelperNamesCache.delete(memory));
+    unisolatedHelperNamesCache.set(memory, pending);
+  }
+  return pending;
 }
 
 /** Where a unit's proof is written: its directory, Dafny's full output, the final Dafny, and the lemmas left to prove. */
@@ -780,7 +799,7 @@ export async function prove(memory: Memory, u: Unit, offered: { proof?: { file: 
   const [generated, imported] = await allDone([lsc("gen", u.text), offered.proof && offered.axioms.length ? lsc("imported", u.imports.text) : undefined]);
   for (const g of [generated, imported]) if (g && !g.gen) return result([lastLines(g.out) || "lsc generated nothing"], g.out);
   const gen = generated.gen!;
-  const prelude = await helperNames(root);
+  const prelude = await helperNames(memory);
   const selectedSolver = await solver();
   const genRegions = regionsOf(gen, prelude);
   total = gen.split("\n").filter((line, i) => ensured(line) !== undefined && !genRegions[i].prelude).length;

@@ -1,12 +1,13 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type * as TS from "typescript";
-import { isExcludedSpecPath, loadConfig } from "./config.ts";
-import { writeWhole } from "./run.ts";
+import { isExcludedSpecPath, loadConfig, type ResolvedVibestackConfig } from "./config.ts";
+import { formatStamp, writeWhole } from "./run.ts";
 import { evaluatorIdentity } from "./installed.ts";
-import { badSpecName, heading, type Spec } from "./parse.ts";
+import { heading, type Spec } from "./parse.ts";
 import type { Result } from "./pipeline.ts";
 import { profile, type TestProfile } from "./testing/profile.ts";
 
@@ -38,33 +39,184 @@ export const filesUnder = (root: string, dir: string) => !fs.existsSync(path.joi
 
 const sidecarSource = /^(.*?)(?:\.vibex?\.[^./]+\.d\.ts|\.d\.vibex?\.tsx?|\.d\.ts)$/;
 
+const FILE_DIGEST_CACHE_LIMIT = 16_384;
+const fileDigestCache = new Map<string, { stamp: string; sha: string; genImport?: boolean }>();
+
+function statEntry(file: string): { stamp: string; sha: string; genImport?: boolean } | undefined {
+  const stat = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+  if (!stat) return undefined;
+  const at = formatStamp(stat);
+  const cached = fileDigestCache.get(file);
+  if (cached && cached.stamp === at) return cached;
+  const bytes = fs.readFileSync(file);
+  const entry = { stamp: at, sha: createHash("sha256").update(bytes).digest("hex") };
+  if (!fileDigestCache.has(file) && fileDigestCache.size >= FILE_DIGEST_CACHE_LIMIT) {
+    fileDigestCache.clear();
+  }
+  fileDigestCache.set(file, entry);
+  return entry;
+}
+
+/** SHA-256 hex digest of a file, cached in memory while its stat stamp (dev, ino, size, mtimeNs, ctimeNs) is unchanged. */
+export function fileDigest(file: string): string {
+  const entry = statEntry(file);
+  if (!entry) throw new Error(`ENOENT: no such file or directory, open '${file}'`);
+  return entry.sha;
+}
+
+/** SHA-256 hex digest of a file if it exists, or "" if absent. */
+export function fileDigestIfExists(file: string): string {
+  return statEntry(file)?.sha ?? "";
+}
+
 export function pruneSidecars(dir: string) {
-  const ts = tsApi();
-  const { config } = ts.readConfigFile(path.join(dir, "tsconfig.json"), ts.sys.readFile);
+  const configFile = path.join(dir, "tsconfig.json");
+  let config: Record<string, any> | undefined;
+  try {
+    config = JSON.parse(fs.readFileSync(configFile, "utf8")) as Record<string, any>;
+  } catch {
+    config = tsApi().readConfigFile(configFile, tsApi().sys.readFile).config;
+  }
   const sidecarDir = config?.vibe?.sidecarDir;
   if (typeof sidecarDir !== "string") return;
   const sidecars = path.resolve(dir, sidecarDir);
   if (!fs.existsSync(sidecars)) return;
+  const existing = filesUnder(sidecars, "");
+  if (!existing.length) return;
+  const ts = tsApi();
   const host: TS.ParseConfigHost = { ...ts.sys, readDirectory: () => [] };
   for (const mirror of ts.parseJsonConfigFileContent(config, host, dir).options.rootDirs ?? []) {
     const within = path.relative(sidecars, mirror);
     if (within.startsWith("..") || path.isAbsolute(within)) continue;
     const base = path.resolve(dir, ...within.split(path.sep).filter(Boolean).map(() => ".."));
-    for (const file of filesUnder(sidecars, "")) {
+    for (const file of existing) {
       const stem = sidecarSource.exec(file)?.[1];
       if (stem && ![".vibe", ".vibex"].some((ext) => fs.existsSync(path.join(base, stem + ext)))) fs.rmSync(path.join(sidecars, file), { force: true });
     }
   }
 }
 
-/** What a package's tsconfig.json names: itself, the configurations it extends and the files it includes, VibeLang's among them. */
-export function configured(dir: string): string[] {
+export interface ConfiguredSnapshot {
+  files: string[];
+  safeSkip: boolean;
+  watched: string[];
+}
+
+/** What a package's tsconfig.json names: itself, the configurations it extends and the files it includes, VibeLang's among them, plus the paths whose stat stamps guard skipping `tsconfig` parsing on warm checks. */
+export function configuredSnapshot(dir: string): ConfiguredSnapshot {
   const ts = tsApi();
-  const config = path.resolve(dir, "tsconfig.json");
+  const at = fs.realpathSync(path.resolve(dir));
+  const config = path.join(at, "tsconfig.json");
   const source = ts.readJsonConfigFile(config, ts.sys.readFile);
-  const { fileNames } = ts.parseJsonSourceFileConfigFileContent(source, ts.sys, path.dirname(config), undefined, config, undefined,
+  const readDirCalls: { rootDir: string; includes?: readonly string[] }[] = [];
+  const absentProbes = new Set<string>();
+  const host: TS.ParseConfigHost = {
+    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+    readFile: (file) => ts.sys.readFile(file),
+    fileExists(file) {
+      const exists = ts.sys.fileExists(file);
+      if (!exists) absentProbes.add(path.resolve(file));
+      return exists;
+    },
+    readDirectory(rootDir, extensions, excludes, includes, depth) {
+      readDirCalls.push({ rootDir: path.resolve(rootDir), includes });
+      return ts.sys.readDirectory(rootDir, extensions, excludes, includes, depth);
+    },
+  };
+  const { fileNames } = ts.parseJsonSourceFileConfigFileContent(source, host, path.dirname(config), undefined, config, undefined,
     [".vibe", ".vibex"].map((extension) => ({ extension, isMixedContent: false, scriptKind: ts.ScriptKind.Deferred })));
-  return [config, ...source.extendedSourceFiles ?? [], ...fileNames];
+  const files = [config, ...source.extendedSourceFiles ?? [], ...fileNames];
+  const watched = new Set<string>(absentProbes);
+  const MAX_WATCHED = 256;
+  const addTree = (target: string, recursive: boolean): boolean => {
+    const stat = fs.lstatSync(target, { throwIfNoEntry: false });
+    if (!stat) {
+      watched.add(target);
+      return watched.size <= MAX_WATCHED;
+    }
+    if (stat.isSymbolicLink() || fs.realpathSync(target) !== target) return false;
+    if (stat.isFile()) {
+      watched.add(target);
+      return watched.size <= MAX_WATCHED;
+    }
+    if (!stat.isDirectory()) return false;
+    const queue = [target];
+    watched.add(target);
+    if (!recursive) return watched.size <= MAX_WATCHED;
+    while (queue.length) {
+      if (watched.size > MAX_WATCHED) return false;
+      const cur = queue.pop()!;
+      for (const entry of fs.readdirSync(cur, { withFileTypes: true })) {
+        if (entry.name === "node_modules" || entry.name === ".git") continue;
+        const full = path.join(cur, entry.name);
+        if (entry.isSymbolicLink()) {
+          const targetStat = fs.statSync(full, { throwIfNoEntry: false });
+          if (!targetStat || targetStat.isDirectory()) return false;
+        } else if (entry.isDirectory()) {
+          if (!watched.has(full)) {
+            watched.add(full);
+            queue.push(full);
+          }
+        }
+      }
+    }
+    return watched.size <= MAX_WATCHED;
+  };
+  let safeSkip = true;
+  for (const call of readDirCalls) {
+    if (!call.includes || !call.includes.length) {
+      safeSkip = false;
+      break;
+    }
+    let realRoot: string;
+    try {
+      realRoot = fs.realpathSync(call.rootDir);
+    } catch {
+      safeSkip = false;
+      break;
+    }
+    for (const raw of call.includes) {
+      if (path.isAbsolute(raw)) {
+        safeSkip = false;
+        break;
+      }
+      const segs = raw.replace(/\\/g, "/").split("/").filter((s) => s !== "" && s !== ".");
+      if (!segs.length) {
+        safeSkip = false;
+        break;
+      }
+      const wildIdx = segs.findIndex((s) => s.includes("*") || s.includes("?"));
+      const prefix = wildIdx === -1 ? segs : segs.slice(0, wildIdx);
+      let sawNonParent = false;
+      let hasNestedParent = false;
+      for (const seg of prefix) {
+        if (seg === "..") {
+          if (sawNonParent) { hasNestedParent = true; break; }
+        } else sawNonParent = true;
+      }
+      if (hasNestedParent) {
+        safeSkip = false;
+        break;
+      }
+      if (wildIdx === -1) {
+        const target = path.resolve(realRoot, ...prefix);
+        if (target === at || at.startsWith(target + path.sep) || !addTree(target, true)) {
+          safeSkip = false;
+          break;
+        }
+      } else {
+        const rest = segs.slice(wildIdx);
+        const recursive = rest.length > 1 || rest[0].includes("**");
+        const base = prefix.length ? path.resolve(realRoot, ...prefix) : realRoot;
+        if ((recursive && (base === at || at.startsWith(base + path.sep))) || !addTree(base, recursive)) {
+          safeSkip = false;
+          break;
+        }
+      }
+    }
+    if (!safeSkip) break;
+  }
+  return { files, safeSkip, watched: safeSkip ? [...watched].sort() : [] };
 }
 
 /** Resolve a project folder before a command reads or writes its files. */
@@ -78,41 +230,45 @@ export function projectRoot(directory: string, base = process.cwd()): string {
 /** The declarations the VibeLang compiler writes for a `.vibe` module: its output, not the package's code. */
 const SIDECAR = /\.d\.vibex?\.ts$/;
 
-/** The directories a spec area may map to: an entry in `vibestack.json` `spec.owners` or `package.json` `specOwners`, or conventional `apps/<name>` and `packages/<name>`. */
-export function specOwnerPaths(root: string, name: string): string[] {
+function specOwnerPathsFrom(declared: Readonly<Record<string, string>>, name: string): string[] {
   const conventional = [`apps/${name}`, `packages/${name}`];
-  const rawPkgOwners: unknown = manifest(root).specOwners;
-  if (rawPkgOwners !== undefined && (typeof rawPkgOwners !== "object" || rawPkgOwners === null || Array.isArray(rawPkgOwners))) {
-    throw new Error("package.json: specOwners must map spec areas to workspace directories");
-  }
-  const declared = loadConfig(root).spec.owners;
   const entries = Object.entries(declared);
   if (!entries.length) return conventional;
   const claimed = new Set<string>();
   let match: string | undefined;
   for (const [area, dir] of entries) {
-    if (badSpecName(area) || typeof dir !== "string" || !/^(?:apps|packages)\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(dir)) {
-      throw new Error(`package.json: specOwners.${area} must map a spec area to a workspace directory under apps/ or packages/`);
-    }
-    if (claimed.has(dir)) throw new Error(`package.json: specOwners assigns ${dir} to more than one spec area`);
     claimed.add(dir);
     if (area === name) match = dir;
   }
   return match ? [match] : conventional.filter((dir) => !claimed.has(dir));
 }
 
+/** The directories a spec area may map to: an entry in `vibestack.json` `spec.owners` or `package.json` `specOwners`, or conventional `apps/<name>` and `packages/<name>`. */
+export function specOwnerPaths(root: string, name: string): string[] {
+  return specOwnerPathsFrom(loadConfig(root).spec.owners, name);
+}
+
+function ownerFrom(root: string, spec: string, specConfig: ResolvedVibestackConfig["spec"], observe?: (file: string) => void): string | undefined {
+  const prefix = `${specConfig.dir}/`;
+  if (!spec.startsWith(prefix)) return undefined;
+  const rest = spec.slice(prefix.length);
+  const slash = rest.indexOf("/");
+  if (slash < 0) return undefined;
+  const name = rest.slice(0, slash);
+  if (isExcludedSpecPath(`${specConfig.dir}/${name}`, specConfig)) return undefined;
+  observe?.(path.join(root, "package.json"));
+  observe?.(path.join(root, "vibestack.json"));
+  const exists = observe ? (file: string) => { observe(file); return fs.existsSync(file); } : fs.existsSync;
+  return specOwnerPathsFrom(specConfig.owners, name).find((dir) => exists(path.join(root, dir, "package.json")) && !exists(path.join(root, dir, specConfig.dir)));
+}
+
 /**
- * The workspace package a spec belongs to by name, as a path from the root: `spec/<name>/…` is `apps/<name>` or
- * `packages/<name>`, if that is a package with no `spec/` of its own. The root's check generates into its `gen/` and
+ * The workspace package a spec belongs to by name, as a path from the root: `<specDir>/<name>/…` is `apps/<name>` or
+ * `packages/<name>`, if that is a package with no `<specDir>/` of its own. The root's check generates into its `gen/` and
  * checks its code (SPEC.md, "One spec tree").
  */
 export function owner(root: string, spec: string, observe?: (file: string) => void): string | undefined {
-  const { spec: specConfig } = loadConfig(root);
-  const [top, name, below] = spec.split("/");
-  if (top !== specConfig.dir || below === undefined || isExcludedSpecPath(`${specConfig.dir}/${name}`, specConfig)) return undefined;
-  observe?.(path.join(root, "package.json"));
-  const exists = observe ? (file: string) => { observe(file); return fs.existsSync(file); } : fs.existsSync;
-  return specOwnerPaths(root, name).find((dir) => exists(path.join(root, dir, "package.json")) && !exists(path.join(root, dir, specConfig.dir)));
+  return ownerFrom(root, spec, loadConfig(root).spec, observe);
 }
 /**
  * The directories whose code a check reads, each as the prefix of a path from the root: "" for the root's own
@@ -124,7 +280,7 @@ export const codeDirs = (root: string): string[] => {
   return ["", ...!fs.existsSync(specRoot) ? []
     : [...new Set(fs.readdirSync(specRoot)
       .filter((name) => !isExcludedSpecPath(`${specConfig.dir}/${name}`, specConfig))
-      .flatMap((name) => owner(root, `${specConfig.dir}/${name}/`) ?? []))].sort().map((dir) => `${dir}/`)];
+      .flatMap((name) => ownerFrom(root, `${specConfig.dir}/${name}/`, specConfig) ?? []))].sort().map((dir) => `${dir}/`)];
 };
 /** Which of `codeDirs` a path from the root is in: the root holds no `apps/` or `packages/` code of its own. */
 export const codeDirOf = (file: string): string => file.match(/^(?:(?:apps|packages)\/[^/]+\/)?/)![0];
@@ -174,8 +330,17 @@ export type Remember = <T>(fingerprint: string, run: () => Promise<T>, keep: (re
  */
 export type Inputs = "tests" | "types";
 
+const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const prosePatterns = new Map<string, RegExp>();
 /** What no test reads: a spec's prose and its Quint copy, and the prose `spec init` and these tools keep for people and agents at a package's top. */
-const PROSE = /^spec\/.*\.md$|^gen\/[^/]*\.qnt$|^(?:README|AGENTS|CLAUDE|CONTRIBUTING|SPEC)\.md$/;
+const prosePattern = (specDir: string) => {
+  let pattern = prosePatterns.get(specDir);
+  if (!pattern) {
+    pattern = new RegExp(`^${escapeRegex(specDir)}/.*\\.md$|^gen/[^/]*\\.qnt$|^(?:README|AGENTS|CLAUDE|CONTRIBUTING|SPEC)\\.md$`);
+    prosePatterns.set(specDir, pattern);
+  }
+  return pattern;
+};
 
 /** A package and the workspace packages it depends on, and theirs, each once: by its real directory and the name it is depended on by. */
 export function workspacePackages(root: string): { directory: string; name: string }[] {
@@ -207,59 +372,96 @@ const SPECIFIER = /(?:\bfrom\s+|\bimport\s*\(\s*|^\s*import\s+)["'](\.\.?\/[^"']
 export function testInputs(root: string, mode: TestProfile = "normal", read: Inputs = "tests"): string | undefined {
   const evaluator = read === "tests" ? evaluatorIdentity(root) : undefined;
   if (read === "tests" && !evaluator) return undefined;
-  const hash = createHash("sha256").update(JSON.stringify(["tests-v6", read, process.versions.node, process.platform, process.arch, profile(mode), ...evaluator ? [evaluator] : []]));
+  const hash = createHash("sha256").update(JSON.stringify(["tests-v7", read, process.versions.node, process.platform, process.arch, profile(mode), ...evaluator ? [evaluator] : []]));
   const served = (file: string) => !isTestFile(file) && ![DRIVERS, TRACES, COUNTEREXAMPLES].some((dir) => file.startsWith(`${dir}/`));
-  const reads: Record<Inputs, (file: string) => boolean> = {
-    tests: (file) => !PROSE.test(file) && !file.startsWith(`${SIMULATIONS}/`),
-    types: (file) => /\.(?:[cm]?[jt]sx?|json|vibex?)$/.test(file) && file !== "spec/lock.json" && ![TRACES, COUNTEREXAMPLES, SIMULATIONS].some((dir) => file.startsWith(`${dir}/`)),
-  };
-  const update = (from: string, file: string) => {
-    const bytes = fs.readFileSync(path.join(from, file));
-    hash.update(`${file}\0${bytes.length}\0`).update(bytes);
-    return bytes;
+  const update = (from: string, file: string, checkGenImport: boolean): boolean => {
+    const full = path.join(from, file);
+    const entry = statEntry(full);
+    if (!entry) throw new Error(`ENOENT: no such file or directory, open '${full}'`);
+    hash.update(`${file}\0${entry.sha}\0`);
+    if (!checkGenImport) return false;
+    if (entry.genImport === undefined) {
+      const text = fs.readFileSync(full, "utf8");
+      entry.genImport = [...text.matchAll(SPECIFIER)].some(([, to]) => path.posix.join(path.posix.dirname(file), to).startsWith("gen/"));
+    }
+    return entry.genImport;
   };
   for (const { directory: from, name } of workspacePackages(root)) {
     hash.update(JSON.stringify(name));
     const own = name === ".";
-    const keep = (file: string) => reads[read](file) && (own || (served(file) && !/^(?:spec|gen)\//.test(file) && (!file.endsWith(".md") || /(?:^|\/)fixtures\//.test(file))));
+    const specDir = loadConfig(from).spec.dir;
+    const prose = prosePattern(specDir);
+    const lockPath = `${specDir}/lock.json`;
+    const reads: Record<Inputs, (file: string) => boolean> = {
+      tests: (file) => !prose.test(file) && !file.startsWith(`${SIMULATIONS}/`),
+      types: (file) => /\.(?:[cm]?[jt]sx?|json|vibex?)$/.test(file) && file !== lockPath && ![TRACES, COUNTEREXAMPLES, SIMULATIONS].some((dir) => file.startsWith(`${dir}/`)),
+    };
+    const keep = (file: string) => reads[read](file) && (own || (served(file) && !file.startsWith(`${specDir}/`) && !file.startsWith("gen/") && (!file.endsWith(".md") || /(?:^|\/)fixtures\//.test(file))));
     const pkg = manifest(from);
     if ([pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies, pkg.peerDependencies].some((deps) =>
       Object.values(deps ?? {}).some((version) => typeof version === "string" && version.startsWith("link:")))) return undefined;
     let gen = own || /(?:^|["/.])gen\//.test(JSON.stringify([pkg.exports, pkg.main, pkg.module, pkg.types]));
     for (const file of packageFiles(from, keep, "", own)) {
-      const bytes = update(from, file);
-      if (!gen && /\.(?:[cm]?[jt]sx?|vibex?)$/.test(file))
-        gen = [...bytes.toString("utf8").matchAll(SPECIFIER)].some(([, to]) => path.posix.join(path.posix.dirname(file), to).startsWith("gen/"));
+      const checkGen = !gen && /\.(?:[cm]?[jt]sx?|vibex?)$/.test(file);
+      if (update(from, file, checkGen)) gen = true;
     }
     const top = gen && fs.existsSync(path.join(from, "gen")) ? fs.readdirSync(path.join(from, "gen"), { withFileTypes: true }).filter((e) => e.isFile()).map((e) => `gen/${e.name}`).sort() : [];
-    for (const file of top.filter(reads[read])) update(from, file);
+    for (const file of top.filter(reads[read])) update(from, file, false);
   }
   const { lock } = packageManager(root);
-  if (lock) hash.update(fs.readFileSync(lock));
+  if (lock) hash.update(fileDigest(lock));
   return hash.digest("hex");
 }
 
 /** A successful complete Node test run, also restored by the Turbo test task. */
 export const testReceipt = (root: string, mode: TestProfile = "normal") => path.join(root, ".cache", `test-result-${mode}.json`);
 
+const specDirContext = new AsyncLocalStorage<string>();
+export const withSpecDir = <T>(specDir: string, run: () => T): T => specDirContext.run(specDir, run);
+
+const citationMatchers = new Map<string, { global: RegExp; test: RegExp }>();
+function citationMatcher(specDir: string) {
+  let entry = citationMatchers.get(specDir);
+  if (!entry) {
+    const source = `(?<![\\w/.-])(${escapeRegex(specDir)}\\/(?:[A-Za-z0-9]+\\/)*[A-Za-z0-9]+\\.md), "([^"]+)"`;
+    entry = { global: new RegExp(source, "g"), test: new RegExp(source) };
+    citationMatchers.set(specDir, entry);
+  }
+  return entry;
+}
+
+class ActiveCitationRegExp extends RegExp {
+  constructor() {
+    super(citationMatcher("spec").test.source);
+  }
+  override test(input: string): boolean {
+    return citationMatcher(specDirContext.getStore() ?? "spec").test.test(input);
+  }
+}
+
 /** Where code cites a story or rule (AGENTS.md, "Tests"). */
-const CITATION = /(?<![\w/.-])(spec\/(?:[A-Za-z0-9]+\/)*[A-Za-z0-9]+\.md), "([^"]+)"/g;
-export const HAS_CITATION = new RegExp(CITATION.source);
+export const HAS_CITATION: RegExp = new ActiveCitationRegExp();
 /** A citation of `heading` in `spec`; `at` is `file:line`, a path from the checking root. */
 export interface Citation { at: string; spec: string; heading: string }
-export function fileCitations(file: string, text: string): Citation[] {
-  if (!text.includes("spec/")) return [];
+export function fileCitations(file: string, text: string, specDir = specDirContext.getStore() ?? "spec"): Citation[] {
+  const prefix = `${specDir}/`;
+  if (!text.includes(prefix)) return [];
+  const pattern = citationMatcher(specDir).global;
   const out: Citation[] = [];
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].includes("spec/")) continue;
-    for (const [, spec, heading] of lines[i].matchAll(CITATION)) out.push({ at: `${file}:${i + 1}`, spec, heading });
+    if (!lines[i].includes(prefix)) continue;
+    pattern.lastIndex = 0;
+    for (const [, spec, heading] of lines[i].matchAll(pattern)) out.push({ at: `${file}:${i + 1}`, spec, heading });
   }
   return out;
 }
 /** Every citation in the code of `dirs`, which are `codeDirs` (all of them unless given): an owner cites as the root does. */
-export const citations = (root: string, dirs = codeDirs(root)): Citation[] => dirs.flatMap((dir) => packageCode(path.join(root, dir))
-  .flatMap((f) => fileCitations(dir + f, fs.readFileSync(path.join(root, dir, f), "utf8"))));
+export const citations = (root: string, dirs = codeDirs(root)): Citation[] => {
+  const specDir = loadConfig(root).spec.dir;
+  return dirs.flatMap((dir) => packageCode(path.join(root, dir))
+    .flatMap((f) => fileCitations(dir + f, fs.readFileSync(path.join(root, dir, f), "utf8"), specDir)));
+};
 
 export function missingCitations(specs: Spec[], found: Citation[]): string[] {
   const valid = new Set<string>();
@@ -305,10 +507,18 @@ export const SIMULATIONS = "gen/traces";
 interface Token { text: string; pos: number; start: number; depth: number; fresh: boolean }
 const JSX_FILE = /\.[cm]?[jt]sx$/i;
 
+function hasLineBreak(text: string, from: number, to: number): boolean {
+  for (let i = from; i < to; i++) {
+    const code = text.charCodeAt(i);
+    if (code === 10 || code === 13) return true;
+  }
+  return false;
+}
+
 function tokenizeJsx(text: string): Token[] | undefined {
   const ts = tsApi();
   const K = ts.SyntaxKind;
-  const source = ts.createSourceFile("file.tsx", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const source = ts.createSourceFile("file.tsx", text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
   const out: Token[] = [];
   const open: boolean[] = [];
   let balanced = true;
@@ -321,16 +531,15 @@ function tokenizeJsx(text: string): Token[] | undefined {
     }
     const kind = node.kind;
     if (kind === K.EndOfFileToken || kind === K.JsxTextAllWhiteSpaces) return;
-    const tokenText = node.getText(source);
+    const pos = node.getFullStart();
+    const start = node.getStart(source);
+    const tokenText = text.slice(start, node.end);
     if (!tokenText) return;
     if (kind === K.CloseParenToken || kind === K.CloseBracketToken || kind === K.CloseBraceToken || kind === K.TemplateTail) {
       if (!open.length) { balanced = false; return; }
       open.pop();
     }
-    const pos = node.getFullStart();
-    const start = node.getStart(source);
-    const trivia = text.slice(pos, start);
-    out.push({ text: tokenText, pos, start, depth: open.length, fresh: trivia.includes("\n") || trivia.includes("\r") });
+    out.push({ text: tokenText, pos, start, depth: open.length, fresh: hasLineBreak(text, pos, start) });
     if (kind === K.OpenParenToken || kind === K.OpenBracketToken || kind === K.OpenBraceToken || kind === K.TemplateHead) open.push(kind === K.TemplateHead);
   };
   walk(source);
