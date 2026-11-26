@@ -981,21 +981,16 @@ function loadTools() {
   }
   return { tools, unsure };
 }
-let loadedTools: ReturnType<typeof loadTools> | undefined;
-const getTools = () => (loadedTools ??= loadTools());
-const isUnsure = () => getTools().unsure;
+const { tools, unsure } = loadTools();
+const isUnsure = () => unsure;
 /** The code of these scripts, by their names and tokens. */
-const code = (files: string[]) => {
-  const { tools } = getTools();
-  return sha(...files.sort().map((f) => `${f}\0${tools.get(f)?.code}`)).slice(0, 12);
-};
+const code = (files: string[]) => sha(...files.sort().map((f) => `${f}\0${tools.get(f)?.code}`)).slice(0, 12);
 /** Every tool's script, where it is: a page that runs one of them may run any (explore.ts, `pageInputs`). */
-export const toolScripts = () => [...getTools().tools.keys()].map((f) => path.join(import.meta.dirname, f));
+export const toolScripts = () => [...tools.keys()].map((f) => path.join(import.meta.dirname, f));
 /** The code of every tool, which such a page reads. */
-export const toolsCode = () => code([...getTools().tools.keys()]);
+export const toolsCode = () => code([...tools.keys()]);
 /** The scripts that run when these do. */
 const closure = (...roots: string[]) => {
-  const { tools } = getTools();
   const reached = new Set(roots.map((f) => f + ext));
   for (const f of reached) for (const to of tools.get(f)?.imports ?? []) reached.add(to);
   return [...reached];
@@ -1042,7 +1037,7 @@ async function toolchainId(root: string, stage: Stage): Promise<string | undefin
     const [quint, typescript, vibelang, ...rest] = versions;
     const compiler = await findVibelangBinary();
     const vibelangId = compiler ? `${vibelang}:${executableDigest(compiler)}` : "no vibelang";
-    return [stage, quint, node, code(stage === "explore" ? closure("explore") : [...getTools().tools.keys()]), typescript, vibelangId, ...rest, verifier].filter(Boolean).join(" ");
+    return [stage, quint, node, code(stage === "explore" ? closure("explore") : [...tools.keys()]), typescript, vibelangId, ...rest, verifier].filter(Boolean).join(" ");
   })()));
   // A failed probe is not remembered: the next check probes again.
   id.catch(() => toolchains.delete(known));
