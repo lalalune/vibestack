@@ -2382,6 +2382,20 @@ function eachCheck() {
     assert.equal(json(customInstall, "package.json").scripts["pnpm:devPreinstall"], "my-preinstall");
     assert.equal(json(customInstall, "package.json").scripts.postinstall, "vibestack link");
     assert.deepEqual(init(customInstall), []);
+    const workspace = scratch({
+      "package.json": read("template/package.json"),
+      "pnpm-workspace.yaml": read("template/pnpm-workspace.yaml"),
+      ".gitignore": read("template/.gitignore"),
+      "tsconfig.json": read("template/tsconfig.json"),
+      "vitest.config.ts": read("template/vitest.config.ts"),
+      "spec/index.md": read("template/spec/index.md"),
+    });
+    const templatePkgBefore = read("package.json", workspace);
+    init(workspace);
+    assert.equal(read("package.json", workspace), templatePkgBefore, "workspace root init leaves template package.json intact");
+    assert.equal(json(workspace, "package.json").scripts.build, undefined, "workspace root init does not add a root vibelang build script");
+    assert.equal(read(".agents/skills/bug-review/SKILL.md", workspace), read(".agents/skills/bug-review/SKILL.md"));
+    assert.deepEqual(init(workspace), []);
   });
 
   test("nested specs link to children and reuse a machine through its directory index", async () => {
@@ -3414,12 +3428,25 @@ function eachCheck() {
     const scaffold = scratch({});
     const initialized = await runCli(path.join(installed, "dist/spec.js"), scaffold, "init");
     assert.equal(initialized.status, 0, initialized.stdout + initialized.stderr);
-    for (const file of [".agents/skills/LICENSE.pstack", ".agents/skills/architect/references/runner-prompt.md", ".agents/skills/typescript-best-practices/references/patterns.md", ".agents/skills/typescript-best-practices/references/typereferences.md"]) {
+    for (const file of [".agents/skills/LICENSE.pstack", ".agents/skills/bug-review/SKILL.md", ".agents/skills/architect/references/runner-prompt.md", ".agents/skills/typescript-best-practices/references/patterns.md", ".agents/skills/typescript-best-practices/references/typereferences.md"]) {
       assert.equal(read(file, scaffold), read(file));
     }
     for (const alias of harnessSkillPaths) assert.equal(fs.realpathSync(path.join(scaffold, alias)), path.join(scaffold, ".agents/skills"));
     assert.ok(!fs.existsSync(path.join(installed, ".claude")));
     assert.ok(!fs.existsSync(path.join(installed, "CLAUDE.md")));
+
+    const createdRoot = scratch({});
+    const createdApp = path.join(createdRoot, "starter");
+    const createdRes = await exec(process.execPath, [path.join(createUnpacked, "dist/cli.js"), "starter", "--no-install"], createdRoot);
+    assert.equal(createdRes.status, 0, createdRes.stdout + createdRes.stderr);
+    const createdPkgBefore = read("package.json", createdApp);
+    const createdInit = await runCli(path.join(installed, "dist/spec.js"), createdApp, "init", "--yes");
+    assert.equal(createdInit.status, 0, createdInit.stdout + createdInit.stderr);
+    assert.equal(read("package.json", createdApp), createdPkgBefore);
+    assert.equal(read(".agents/skills/bug-review/SKILL.md", createdApp), read(".agents/skills/bug-review/SKILL.md"));
+    assert.ok(fs.existsSync(path.join(createdApp, "AGENTS.md")));
+    assert.ok(fs.existsSync(path.join(createdApp, "SPEC.md")));
+    assert.ok(fs.existsSync(path.join(createdApp, ".agents/.vibestack-manifest.json")));
 
     const checked = await runCli(path.join(installed, "dist/spec.js"), consumer, "check", "--json");
     const proof = answer(checked.stdout).results.find((result: Result) => result.stage === "proof");
@@ -4849,7 +4876,47 @@ test("the lint refuses, in a project's own code, a comment that is neither a cit
   const { default: config } = await import(path.join(project, "eslint.config.js"));
   const [file, left] = Object.entries(config.find((block: { rules?: Record<string, unknown> }) => block.rules?.["code/comments"]).rules["code/comments"][1].left as Record<string, number>).find(([file]) => file.endsWith(".vibe"))!;
   const notes = (n: number) => Array.from({ length: n }, () => "// a note");
-  assert.deepEqual([(await found(file, notes(left))).length, (await found(file, notes(left + 1))).length], [0, left + 1]);
+  assert.deepEqual([
+    (await found(file, notes(left))).length,
+    (await found(file, notes(left + 1))).length,
+    (await found(file, notes(left - 1))).length,
+    (await found(file, notes(0))).length,
+  ], [0, left + 1, 1, 1]);
+
+  const { default: js } = await import("@eslint/js");
+  const { default: tseslint } = await import("typescript-eslint");
+  const { default: vibelang } = await import("vibelang/eslint");
+  const { vibestackConfig } = await import("../packages/vibestack/src/eslint.ts");
+  const presetRoot = scratch({ "package.json": JSON.stringify({ name: "preset-ratchet", type: "module" }) });
+  const presetLint = new ESLint({
+    cwd: presetRoot,
+    overrideConfigFile: true,
+    overrideConfig: vibestackConfig({
+      root: presetRoot,
+      plugins: { js, tseslint, vibelang },
+      commented: { "apps/app/src/ratchet.vibe": 2 },
+      scheduled: { "apps/app/src/ratchet.vibe": 2 },
+    }) as never,
+  });
+  const presetHits = async (lines: readonly string[]) => {
+    const [res] = await presetLint.lintText(lines.join("\n"), { filePath: path.join(presetRoot, "apps/app/src/ratchet.vibe") });
+    return res!.messages.filter((m) => m.ruleId?.startsWith("code/")).map((m) => `${m.ruleId}: ${m.message}`);
+  };
+  assert.deepEqual(await presetHits(["// a", "// b", "setTimeout(() => {}, 1);", "setTimeout(() => {}, 2);"]), []);
+  assert.deepEqual(
+    (await presetHits(["// a", "setTimeout(() => {}, 1);"])).sort(),
+    [
+      'code/comments: Stale commented ratchet (2) for "apps/app/src/ratchet.vibe": 1 remain; lower it to 1 so the ratchet tightens.',
+      'code/effects: Stale scheduled ratchet (2) for "apps/app/src/ratchet.vibe": 1 remain; lower it to 1 so the ratchet tightens.',
+    ],
+  );
+  assert.deepEqual(
+    (await presetHits(["export const ok = 1;"])).sort(),
+    [
+      'code/comments: Stale commented ratchet (2) for "apps/app/src/ratchet.vibe": 0 remain; remove it so the ratchet tightens.',
+      'code/effects: Stale scheduled ratchet (2) for "apps/app/src/ratchet.vibe": 0 remain; remove it so the ratchet tightens.',
+    ],
+  );
 });
 
 test("the barrel lint refuses non-barrel workspace exports, subpath imports, inline disables and stale ratchets", async (context) => {

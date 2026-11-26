@@ -51,7 +51,7 @@ const USAGE = [
   "Options:",
   "  --example <order|dashboard|fullstack|assistant>  Scaffold an official example",
   "  --mode <vibelang|typescript|specs-only>          Write vibestack.json with mode",
-  "  --no-install                                     Skip pnpm install, link, and doctor",
+  "  --no-install                                     Skip pnpm install, init, and doctor",
   "  --vibestack-version <ver|path>                   Pin vibestack version or local path",
   "  -v, --version                                    Show CLI version",
   "  -h, --help                                       Show this help message",
@@ -386,9 +386,9 @@ function installAndSetup(targetDir: string): void {
     throw new Error(`pnpm ${installArgs.join(" ")} exited with status ${installStatus}.`);
   }
 
-  const linkStatus = runCommand(pnpm, ["exec", "vibestack", "link"], targetDir);
-  if (linkStatus !== 0) {
-    throw new Error(`pnpm exec vibestack link exited with status ${linkStatus}.`);
+  const initStatus = runCommand(pnpm, ["exec", "vibestack", "init", "--yes"], targetDir);
+  if (initStatus !== 0) {
+    throw new Error(`pnpm exec vibestack init --yes exited with status ${initStatus}.`);
   }
 
   runCommand(pnpm, ["exec", "vibestack", "doctor"], targetDir);

@@ -187,7 +187,7 @@ function updatePostinstall(scripts: Record<string, string>): { changed: boolean;
   return { changed: true, value: current ? `${current} && vibestack link` : "vibestack link" };
 }
 
-function addMissingScripts(json: Record<string, any>, mode: VibestackMode): string[] {
+function addMissingScripts(json: Record<string, any>, mode: VibestackMode, isWorkspace: boolean): string[] {
   const scripts: Record<string, string> = { ...(json.scripts ?? {}) };
   const added: string[] = [];
   const coreScripts: [string, string][] = [
@@ -208,7 +208,10 @@ function addMissingScripts(json: Record<string, any>, mode: VibestackMode): stri
     }
   }
   if (mode === "vibelang") {
-    for (const [name, cmd] of [["dev", "spec studio"], ["build", "vibelang"], ["test", "vitest run"]] as const) {
+    const modeScripts = isWorkspace
+      ? ([["dev", "spec studio"], ["test", "vitest run"]] as const)
+      : ([["dev", "spec studio"], ["build", "vibelang"], ["test", "vitest run"]] as const);
+    for (const [name, cmd] of modeScripts) {
       if (!scripts[name] || (name === "test" && /no test specified/.test(scripts[name]))) {
         scripts[name] = cmd;
         added.push(name);
@@ -298,7 +301,7 @@ export function initProject(root: string, options: InitOptions = {}): string[] {
 
   const pkgFile = path.join(root, "package.json");
   const json: Record<string, any> = fs.existsSync(pkgFile) ? JSON.parse(fs.readFileSync(pkgFile, "utf8")) : {};
-  const addedScripts = addMissingScripts(json, mode);
+  const addedScripts = addMissingScripts(json, mode, isWorkspace);
   let manifestChanged = addedScripts.length > 0;
   if (addedScripts.length) done.push(`package.json scripts: ${addedScripts.join(", ")}`);
 
