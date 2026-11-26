@@ -5176,6 +5176,28 @@ assert.equal((await other).status, 0);
     assert.equal(checked.status, 0, checked.stderr);
     assert.deepEqual([JSON.parse(checked.stdout), toolRuns(path.join(hosted.root, ".spec-cache")).length], [['"default"', '"default"', '"from host"'], 0]);
 
+    const corruptProj = install("corrupt-view");
+    const corruptCache = scratch({});
+    const corruptEnv = { ...process.env, XDG_CACHE_HOME: corruptCache };
+    const corruptScript = (arg: string) => `
+      import { act } from "./vibestack/action.ts";
+      const r = await act({ root: ".", fresh: false, used: new Set() }, "quint", ["typecheck", ${JSON.stringify(arg)}], "run", {});
+      console.log(r.files["ir.json"]);
+    `;
+    const corruptFirst = await exec(process.execPath, ["--input-type=module", "--eval", corruptScript("a")], corruptProj.root, corruptEnv);
+    assert.equal(corruptFirst.status, 0, corruptFirst.stderr);
+    assert.equal(JSON.parse(corruptFirst.stdout), "default");
+    const corruptPrograms = path.join(corruptCache, "vibestack/programs/1");
+    const corruptViews = fs.readdirSync(corruptPrograms);
+    assert.equal(corruptViews.length, 1);
+    const corruptExtra = path.join(corruptPrograms, corruptViews[0], "packages/1/index.js");
+    fs.writeFileSync(corruptExtra, 'module.exports = "tampered";\n');
+    const corruptSecond = await exec(process.execPath, ["--input-type=module", "--eval", corruptScript("b")], corruptProj.root, corruptEnv);
+    assert.equal(corruptSecond.status, 0, corruptSecond.stderr);
+    assert.equal(JSON.parse(corruptSecond.stdout), "default", "corrupt isolated view must recover cleanly on direct act()");
+    const corruptThird = await exec(process.execPath, ["--input-type=module", "--eval", corruptScript("c")], corruptProj.root, corruptEnv);
+    assert.equal(corruptThird.status, 0, corruptThird.stderr);
+    assert.equal(JSON.parse(corruptThird.stdout), "default", "subsequent direct act() after recovery must continue succeeding");
   });
 
   test("check phase timings end a simulation before later definitions finish generating", { skip: process.platform === "win32" }, async () => {
@@ -5674,4 +5696,57 @@ test("custom spec.dir accept/check round-trip with citations, -- separator for -
   } finally {
     await watcher.stop();
   }
+
+  const extRoot = scratch({
+    "ext/a/ok.ts": "export const ok = 1;\n",
+    "app/package.json": JSON.stringify({ name: "types-soundness", private: true, type: "module" }),
+    "app/vibestack.json": JSON.stringify({ mode: "typescript", stages: { tests: "skip", explore: "skip" } }),
+    "app/tsconfig.json": JSON.stringify({
+      compilerOptions: { target: "es2023", module: "nodenext", strict: true, noEmit: true, allowImportingTsExtensions: true },
+      include: ["src", ".shared/**/*.ts", "../ext/**/*.ts"],
+    }),
+    "app/spec/index.md": "# Sound\n\n## Story: Ok\n\n### One\n\n```quint\npure val one = 1\n```\n",
+    "app/src/index.ts": "export const x = 1;\n",
+  });
+  const extApp = path.join(extRoot, "app");
+  const typesWarm1 = await run(extApp);
+  assert.ok(typesWarm1.said("types", /application typechecks/), typesWarm1.text);
+  const typesWarm2 = await run(extApp);
+  assert.ok(typesWarm2.said("types", /application typechecks/), typesWarm2.text);
+
+  fs.mkdirSync(path.join(extApp, ".shared"), { recursive: true });
+  fs.writeFileSync(path.join(extApp, ".shared/broken.ts"), 'export const bad: number = "nope";\n');
+  const typesHidden = await run(extApp);
+  assert.ok(typesHidden.results.some((r) => r.stage === "types" && !r.ok), "adding .shared/broken.ts must invalidate types cache");
+  fs.rmSync(path.join(extApp, ".shared"), { recursive: true, force: true });
+
+  const typesRecovered = await run(extApp);
+  assert.ok(typesRecovered.said("types", /application typechecks/), typesRecovered.text);
+
+  fs.mkdirSync(path.join(extRoot, "ext/b"), { recursive: true });
+  fs.writeFileSync(path.join(extRoot, "ext/b/broken.ts"), 'export const bad: number = "nope";\n');
+  const typesExternal = await run(extApp);
+  assert.ok(typesExternal.results.some((r) => r.stage === "types" && !r.ok), "adding ../ext/b/broken.ts must invalidate types cache");
+  fs.rmSync(path.join(extRoot, "ext/b"), { recursive: true, force: true });
+
+  const proofFailRoot = scratch({
+    "package.json": JSON.stringify({
+      name: "proof-fail-skips-tests",
+      private: true,
+      type: "module",
+      scripts: { test: 'node -e "require(\'node:fs\').writeFileSync(\'ran-tests.marker\', \'1\')"' },
+    }),
+    "vibestack.json": JSON.stringify({ mode: "typescript", stages: { explore: "skip" } }),
+    "tsconfig.json": JSON.stringify({
+      compilerOptions: { target: "es2023", module: "nodenext", strict: true, noEmit: true, allowImportingTsExtensions: true },
+      include: ["src"],
+    }),
+    "spec/index.md": ruleSpec("pure val initial: int = 0\npure def canInc(n: int): bool = n < 2\npure def inc(n: int): int = n + 1\npure def alwaysNonNeg(n: int): bool = n >= 0"),
+    "src/index.ts": "//@ pure\nexport function broken(n: number): number {\n  //@ ensures \\result > n\n  return n;\n}\n",
+  });
+  const proofFailRes = await runCli(cli, proofFailRoot, "check", "--timings");
+  assert.notEqual(proofFailRes.status, 0);
+  assert.match(proofFailRes.stdout, /skipped\s+tests, traces and explore/);
+  assert.doesNotMatch(proofFailRes.stdout, /timings:[\s\S]*\btests\b/, "failed proof must not emit tests phase timing");
+  assert.equal(fs.existsSync(path.join(proofFailRoot, "ran-tests.marker")), false, "failed proof must not execute test script");
 });

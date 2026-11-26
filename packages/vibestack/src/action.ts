@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { entry, executableDigest, installedProgram, inSteadyCheck, recall, stableInstallation, store, steady, dafnyLauncher, verifierIdentity, type Memory } from "./cache.ts";
+import { entry, executableDigest, installedProgram, inSteadyCheck, recall, recoverIsolatedProgram, stableInstallation, store, steady, dafnyLauncher, verifierIdentity, type Memory } from "./cache.ts";
 import { InstallationChanged } from "./installed.ts";
 import { NEEDS_DAFNY, exec, stamp } from "./run.ts";
 import { SIMULATOR, TABLE } from "./simulator.ts";
@@ -70,17 +70,25 @@ const TOOLS = {
 export async function act(memory: Memory, tool: keyof typeof TOOLS, args: string[], dir: string | { tempPrefix: string }, files: Record<string, Input>): Promise<Ran> {
   if (tool === "dafny" && !inSteadyCheck()) return steady(() => act(memory, tool, args, dir, files));
   const { launcher, script, answered }: Tool = TOOLS[tool];
-  const installed = launcher && installedProgram(memory.root, launcher);
+  let installed = launcher && installedProgram(memory.root, launcher);
   if (launcher && !installed) throw new Error(`${launcher} is not installed; run pnpm install`);
   const exe = installed?.exe ?? dafnyLauncher();
   const since = script && stamp([script]);
   const id = installed ? installed.id && installed.id + (script ? ` ${executableDigest(script)}` : "") : await verifierIdentity();
-  const at = await entry(memory.root, "action", [id, JSON.stringify(args), ...Object.keys(files).sort().flatMap((f) => [f, files[f].key])], (tool === "quint" || tool === "simulator") && args[0] === "run");
+  const evaluates = (tool === "quint" || tool === "simulator") && args[0] === "run";
+  const keyTail = [JSON.stringify(args), ...Object.keys(files).sort().flatMap((f) => [f, files[f].key])];
+  let at = await entry(memory.root, "action", [id, ...keyTail], evaluates);
   const known = recall<Ran>(memory, at);
   if (known) return known;
   if (installed?.verifyIsolated && !installed.verifyIsolated()) {
-    stableInstallation(false);
-    throw new InstallationChanged();
+    installed = recoverIsolatedProgram(memory.root, launcher!, installed);
+    if (!installed) throw new Error(`${launcher} is not installed; run pnpm install`);
+    if (installed.verifyIsolated && !installed.verifyIsolated()) {
+      stableInstallation(false);
+      throw new InstallationChanged();
+    }
+    const recoveredId = installed.id && installed.id + (script ? ` ${executableDigest(script)}` : "");
+    if (recoveredId !== id) at = await entry(memory.root, "action", [recoveredId, ...keyTail], evaluates);
   }
   const temporary = typeof dir !== "string";
   const where = temporary ? fs.mkdtempSync(path.join(os.tmpdir(), dir.tempPrefix)) : path.resolve(memory.root, dir);

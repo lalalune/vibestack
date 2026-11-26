@@ -22,7 +22,7 @@ import { generated, mirrorGen, publishGen, typecheckAll, proofUnits, proofFiles,
 import { simulation, type Simulation } from "./simulate.ts";
 import { runTasks } from "./tasks.ts";
 import { tests } from "./testing/check.ts";
-import { sha, indent, packageScripts, pruneSidecars, configured, testInputs, readSrc, codeDirs, codeDirOf, owner, specOwnerPaths, projectRoot, allDone, UNREAD, workspacePackages, fileDigestIfExists, withSpecDir, type Reported, type SrcFile } from "./util.ts";
+import { sha, indent, packageScripts, pruneSidecars, configuredSnapshot, testInputs, readSrc, codeDirs, codeDirOf, owner, specOwnerPaths, projectRoot, allDone, UNREAD, workspacePackages, fileDigestIfExists, withSpecDir, type Reported, type SrcFile } from "./util.ts";
 import { profile, type TestProfile } from "./testing/profile.ts";
 
 export { readSpecs, parseSpec, expandListHelpers, type Spec, type Rule, type Story } from "./parse.ts";
@@ -447,13 +447,20 @@ async function proofStage(root: string, memory: Memory, specs: Spec[], models: M
 
 interface TypecheckCache {
   read: [string, string][];
-  configured?: [string, string][];
-  externalDirs?: [string, string][];
+  configured: [string, string][];
+  safeSkip: boolean;
+  watched: [string, string][];
 }
 
-function dirStamp(dir: string): string {
-  const s = fs.statSync(dir, { bigint: true, throwIfNoEntry: false });
+function pathStamp(target: string): string {
+  const s = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
   return s ? formatStamp(s) : "";
+}
+
+function sameEntries(a: readonly [string, string][], b: readonly [string, string][]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i][0] !== b[i][0] || a[i][1] !== b[i][1]) return false;
+  return true;
 }
 
 /**
@@ -467,30 +474,40 @@ async function typecheck(memory: Memory, root: string, dir: string, compiler: "v
   if (compiler === "vibelang") pruneSidecars(at);
   const contents = (files: string[]) => files.map((file): [string, string] => [path.relative(root, file), fileDigestIfExists(file)]);
   const matches = (saved: [string, string][]) => saved.every(([rel, expected]) => fileDigestIfExists(path.join(root, rel)) === expected);
+  const stamps = (paths: string[]) => paths.map((p): [string, string] => [path.relative(root, p), pathStamp(p)]);
   const inputs = testInputs(at, "normal", "types");
-  const kept = inputs === undefined ? undefined : await entry(root, "types", ["types-v2", compiler, dir, inputs]);
+  const kept = inputs === undefined ? undefined : await entry(root, "types", ["types-v3", compiler, dir, inputs]);
   const passed = kept && recall<TypecheckCache>(memory, kept);
-  if (passed && passed.configured && passed.externalDirs
-    && matches(passed.read)
-    && matches(passed.configured)
-    && passed.externalDirs.every(([rel, expected]) => dirStamp(path.join(root, rel)) === expected)) {
-    return { ok: true, out: "" };
+  if (passed && matches(passed.read)) {
+    if (passed.safeSkip
+      && matches(passed.configured)
+      && passed.watched.every(([rel, expected]) => pathStamp(path.join(root, rel)) === expected)) {
+      return { ok: true, out: "" };
+    }
+    const snapshot = configuredSnapshot(at);
+    const currentConfigured = contents(snapshot.files);
+    if (sameEntries(passed.configured, currentConfigured)) {
+      if (snapshot.safeSkip && kept) {
+        store(memory, kept, {
+          read: passed.read,
+          configured: currentConfigured,
+          safeSkip: true,
+          watched: stamps(snapshot.watched),
+        } satisfies TypecheckCache);
+      }
+      return { ok: true, out: "" };
+    }
   }
   const r = await run(compiler, ["--noEmit", "--listFiles", "-p", "."], at);
   const lines = r.out.split("\n");
   const local = (line: string) => path.isAbsolute(line) && fs.existsSync(line);
   if (r.ok && kept) {
-    const configuredFiles = configured(at);
-    const knownRoots = workspacePackages(at).map((pkg) => pkg.directory);
-    const withinKnown = (file: string) => {
-      const resolved = path.resolve(file);
-      return knownRoots.some((base) => resolved === base || resolved.startsWith(base + path.sep));
-    };
-    const extDirs = [...new Set(configuredFiles.filter((f) => !withinKnown(f)).map((f) => path.dirname(path.resolve(f))))].sort();
+    const snapshot = configuredSnapshot(at);
     store(memory, kept, {
       read: contents(lines.filter((line) => local(line) && !line.split(/[\\/]/).includes("node_modules"))),
-      configured: contents(configuredFiles),
-      externalDirs: extDirs.map((d): [string, string] => [path.relative(root, d), dirStamp(d)]),
+      configured: contents(snapshot.files),
+      safeSkip: snapshot.safeSkip,
+      watched: stamps(snapshot.watched),
     } satisfies TypecheckCache);
   }
   return { ok: r.ok, out: lines.filter((line) => !line.startsWith("bundled:///") && !local(line)).join("\n") };
@@ -657,34 +674,6 @@ async function checkLocked(root: string, accept: false | "reviews" | "unproved",
           }
         }
       }
-      const runTestsStage = () => {
-        const tested = observe?.("tests");
-        const p = withSpecDir(config.spec.dir, () => allDone(dirs.map((dir) =>
-          tests(root, dir, specs, (key, ran, keep) => remembered(memory, entry(root, "tests", [dir, key]), ran, keep), mode, memory.fresh, config.stages.tests === "vitest"))));
-        if (tested) void p.then(() => tested(), () => tested());
-        return p;
-      };
-      const runTracesStage = () => {
-        const traced = observe?.("traces");
-        const p = allDone(dirs.map((dir) =>
-          conformance(path.join(root, dir), machines, scripts.get(dir)!, (key, ran, keep) => remembered(memory, entry(root, "traces", [dir, key]), ran, keep), wrote, mode)));
-        if (traced) void p.then(() => traced(), () => traced());
-        return p;
-      };
-      // Overlap read-only tests (and traces when drivers already exist) with proof once types and simulations pass.
-      const canOverlapTests = allOk && config.stages.tests !== "skip" && dirs.every((dir) => {
-        if (config.stages.tests !== "vitest" || !fs.existsSync(path.join(root, dir, "test"))) return true;
-        const script = scripts.get(dir)?.test;
-        return !!script && !/no test specified/.test(script);
-      });
-      const overlappedTests = canOverlapTests ? runTestsStage() : undefined;
-      if (overlappedTests) running.push(overlappedTests.catch(() => {}));
-      const canOverlapTraces = canOverlapTests && dirs.every((dir) => !fs.existsSync(path.join(root, dir, "src")) || fs.existsSync(path.join(root, dir, "test/drivers")));
-      const overlappedTraces = canOverlapTraces && overlappedTests
-        ? overlappedTests.then(() => runTracesStage())
-        : undefined;
-      if (overlappedTraces) running.push(overlappedTraces.catch(() => {}));
-
       const proofs = await started.proving;
       proofs.results.forEach(report);
       ledger = proofs.ledger;
@@ -693,11 +682,17 @@ async function checkLocked(root: string, accept: false | "reviews" | "unproved",
         if (config.stages.tests === "skip") {
           skip("tests", "disabled by vibestack config");
         } else {
-          const allTestRows = await (overlappedTests ?? runTestsStage());
+          const tested = observe?.("tests");
+          const allTestRows = await withSpecDir(config.spec.dir, () => allDone(dirs.map((dir) =>
+            tests(root, dir, specs, (key, ran, keep) => remembered(memory, entry(root, "tests", [dir, key]), ran, keep), mode, memory.fresh, config.stages.tests === "vitest"))));
           for (let i = 0; i < dirs.length; i++) for (const r of allTestRows[i]) report(within(dirs[i], result(r)));
+          tested?.();
         }
-        const allTraceRows = await (overlappedTraces ?? runTracesStage());
+        const traced = observe?.("traces");
+        const allTraceRows = await allDone(dirs.map((dir) =>
+          conformance(path.join(root, dir), machines, scripts.get(dir)!, (key, ran, keep) => remembered(memory, entry(root, "traces", [dir, key]), ran, keep), wrote, mode)));
         for (let i = 0; i < dirs.length; i++) for (const r of allTraceRows[i]) report(within(dirs[i], result(r)));
+        traced?.();
         if (config.stages.explore === "skip") {
           skip("explore", "disabled by vibestack config");
         } else {

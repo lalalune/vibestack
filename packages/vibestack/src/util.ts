@@ -96,14 +96,127 @@ export function pruneSidecars(dir: string) {
   }
 }
 
-/** What a package's tsconfig.json names: itself, the configurations it extends and the files it includes, VibeLang's among them. */
-export function configured(dir: string): string[] {
+export interface ConfiguredSnapshot {
+  files: string[];
+  safeSkip: boolean;
+  watched: string[];
+}
+
+/** What a package's tsconfig.json names: itself, the configurations it extends and the files it includes, VibeLang's among them, plus the paths whose stat stamps guard skipping `tsconfig` parsing on warm checks. */
+export function configuredSnapshot(dir: string): ConfiguredSnapshot {
   const ts = tsApi();
-  const config = path.resolve(dir, "tsconfig.json");
+  const at = fs.realpathSync(path.resolve(dir));
+  const config = path.join(at, "tsconfig.json");
   const source = ts.readJsonConfigFile(config, ts.sys.readFile);
-  const { fileNames } = ts.parseJsonSourceFileConfigFileContent(source, ts.sys, path.dirname(config), undefined, config, undefined,
+  const readDirCalls: { rootDir: string; includes?: readonly string[] }[] = [];
+  const absentProbes = new Set<string>();
+  const host: TS.ParseConfigHost = {
+    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+    readFile: (file) => ts.sys.readFile(file),
+    fileExists(file) {
+      const exists = ts.sys.fileExists(file);
+      if (!exists) absentProbes.add(path.resolve(file));
+      return exists;
+    },
+    readDirectory(rootDir, extensions, excludes, includes, depth) {
+      readDirCalls.push({ rootDir: path.resolve(rootDir), includes });
+      return ts.sys.readDirectory(rootDir, extensions, excludes, includes, depth);
+    },
+  };
+  const { fileNames } = ts.parseJsonSourceFileConfigFileContent(source, host, path.dirname(config), undefined, config, undefined,
     [".vibe", ".vibex"].map((extension) => ({ extension, isMixedContent: false, scriptKind: ts.ScriptKind.Deferred })));
-  return [config, ...source.extendedSourceFiles ?? [], ...fileNames];
+  const files = [config, ...source.extendedSourceFiles ?? [], ...fileNames];
+  const watched = new Set<string>(absentProbes);
+  const MAX_WATCHED = 256;
+  const addTree = (target: string, recursive: boolean): boolean => {
+    const stat = fs.lstatSync(target, { throwIfNoEntry: false });
+    if (!stat) {
+      watched.add(target);
+      return watched.size <= MAX_WATCHED;
+    }
+    if (stat.isSymbolicLink() || fs.realpathSync(target) !== target) return false;
+    if (stat.isFile()) {
+      watched.add(target);
+      return watched.size <= MAX_WATCHED;
+    }
+    if (!stat.isDirectory()) return false;
+    const queue = [target];
+    watched.add(target);
+    if (!recursive) return watched.size <= MAX_WATCHED;
+    while (queue.length) {
+      if (watched.size > MAX_WATCHED) return false;
+      const cur = queue.pop()!;
+      for (const entry of fs.readdirSync(cur, { withFileTypes: true })) {
+        if (entry.name === "node_modules" || entry.name === ".git") continue;
+        const full = path.join(cur, entry.name);
+        if (entry.isSymbolicLink()) {
+          const targetStat = fs.statSync(full, { throwIfNoEntry: false });
+          if (!targetStat || targetStat.isDirectory()) return false;
+        } else if (entry.isDirectory()) {
+          if (!watched.has(full)) {
+            watched.add(full);
+            queue.push(full);
+          }
+        }
+      }
+    }
+    return watched.size <= MAX_WATCHED;
+  };
+  let safeSkip = true;
+  for (const call of readDirCalls) {
+    if (!call.includes || !call.includes.length) {
+      safeSkip = false;
+      break;
+    }
+    let realRoot: string;
+    try {
+      realRoot = fs.realpathSync(call.rootDir);
+    } catch {
+      safeSkip = false;
+      break;
+    }
+    for (const raw of call.includes) {
+      if (path.isAbsolute(raw)) {
+        safeSkip = false;
+        break;
+      }
+      const segs = raw.replace(/\\/g, "/").split("/").filter((s) => s !== "" && s !== ".");
+      if (!segs.length) {
+        safeSkip = false;
+        break;
+      }
+      const wildIdx = segs.findIndex((s) => s.includes("*") || s.includes("?"));
+      const prefix = wildIdx === -1 ? segs : segs.slice(0, wildIdx);
+      let sawNonParent = false;
+      let hasNestedParent = false;
+      for (const seg of prefix) {
+        if (seg === "..") {
+          if (sawNonParent) { hasNestedParent = true; break; }
+        } else sawNonParent = true;
+      }
+      if (hasNestedParent) {
+        safeSkip = false;
+        break;
+      }
+      if (wildIdx === -1) {
+        const target = path.resolve(realRoot, ...prefix);
+        if (target === at || at.startsWith(target + path.sep) || !addTree(target, true)) {
+          safeSkip = false;
+          break;
+        }
+      } else {
+        const rest = segs.slice(wildIdx);
+        const recursive = rest.length > 1 || rest[0].includes("**");
+        const base = prefix.length ? path.resolve(realRoot, ...prefix) : realRoot;
+        if ((recursive && (base === at || at.startsWith(base + path.sep))) || !addTree(base, recursive)) {
+          safeSkip = false;
+          break;
+        }
+      }
+    }
+    if (!safeSkip) break;
+  }
+  return { files, safeSkip, watched: safeSkip ? [...watched].sort() : [] };
 }
 
 /** Resolve a project folder before a command reads or writes its files. */

@@ -674,6 +674,7 @@ function prunePrograms(programsDir: string, keepViews: ReadonlySet<string>, cach
 }
 
 let programSource: string | undefined;
+const programMeta = new WeakMap<Program, { index: string; latestKey: string; unchangedSource: () => boolean }>();
 export function installedProgram(root: string, tool: keyof typeof TOOL_PACKAGES): Program | undefined {
   const scope = checking.getStore();
   const key = `${tool}\0${path.resolve(root)}`;
@@ -755,6 +756,7 @@ export function installedProgram(root: string, tool: keyof typeof TOOL_PACKAGES)
           && unchangedSource() && (!isolatedChecked || unchangedIsolated());
         const verifyIsolated = () => { isolatedChecked = true; return unchangedIsolated(); };
         previous = rememberLatest({ exe, id: installed.id, isolated: installed.isolated, unchanged: stable, verifyIsolated });
+        programMeta.set(previous, { index, latestKey, unchangedSource });
       } else {
         const stable = () => process.env.NODE_PATH === searchPath && nodeFlags() === nodeOptions && process.env.PATH === commandPath && unchanged();
         previous = rememberLatest({ exe, id: undefined, unchanged: stable });
@@ -772,11 +774,26 @@ export function installedProgram(root: string, tool: keyof typeof TOOL_PACKAGES)
           && unchangedSource() && (!isolatedChecked || unchangedIsolated()),
         verifyIsolated,
       });
+      programMeta.set(previous, { index, latestKey, unchangedSource });
     }
   }
   const program: Program = { ...previous, unchanged: () => findBin(tool, root) === exe && previous.unchanged() };
+  const meta = programMeta.get(previous);
+  if (meta) programMeta.set(program, meta);
   scope?.programs.set(key, program);
   return program;
+}
+
+export function recoverIsolatedProgram(root: string, tool: keyof typeof TOOL_PACKAGES, current: Program): Program | undefined {
+  const meta = programMeta.get(current);
+  if (!meta || findBin(tool, root) !== current.exe || !meta.unchangedSource()) {
+    stableInstallation(false);
+    throw new InstallationChanged();
+  }
+  fs.rmSync(meta.index, { force: true });
+  latest.delete(meta.latestKey);
+  checking.getStore()?.programs.delete(`${tool}\0${path.resolve(root)}`);
+  return installedProgram(root, tool);
 }
 
 export function evaluatorForCheck(root: string): Evaluator | undefined {
