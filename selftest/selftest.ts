@@ -2590,7 +2590,7 @@ function eachCheck() {
     assert.ok(["area.ts", "own.ts", "app.ts"].every((f) => fs.existsSync(path.join(root, "gen", f))) && !fs.existsSync(path.join(root, "apps/own/gen")));
     const normal = profile("normal");
     for (const [stage, said] of [["types", /^apps\/app: application typechecks/], ["tests", /^apps\/app: pass/], ["traces", /^apps\/app: script driver:app: simulated states and refused events agree with spec\/app\/index\.md/],
-      ["traces", new RegExp(`^apps/app: test/drivers/app\\.ts: ${normal.runs} walks of seed ${normal.seed} agree with spec/app/index\\.md`)],
+      ["traces", new RegExp(`^apps/app: test/drivers/app\\.ts: 1 model path, ${normal.runs} walks of seed ${normal.seed} \\(1/1 transitions accepted, 1/1 refused\\) agree with spec/app/index\\.md`)],
       ["proof", /^apps-app-src-one\.ts: all 1 obligations proved/], ["review", /^apps\/app\/src\/: recorded as reconciled: apps\/app\/src\/one\.ts/]] as const)
       assert.ok(first.said(stage, said), `${stage}\n${first.text}`);
     assert.deepEqual(Object.keys(JSON.parse(read("spec/lock.json", root)).contracts), ["apps/app/src/one.ts"]);
@@ -2628,7 +2628,7 @@ function eachCheck() {
     assert.match(stripVTControlCharacters(mistyped.text), /src\/wrong\.ts(?:\(1,14\):|:1:14 -) error TS2322: Type 'string' is not assignable to type 'number'/);
     says(failing, ["tests"], "tests", /^apps\/app: fail\n[\s\S]*never holds/);
     // The disagreement is saved, shrunk, in the owner, and replayed first from then on.
-    says(departing, ["traces"], "traces", /^apps\/app: test\/drivers\/app\.ts: the program departs from the spec\n[\s\S]*conformance to spec\/app\/index\.md: (journey|walk)[\s\S]*Saved as test\/counterexamples\/app\/[0-9a-f]{12}\.json, which/);
+    says(departing, ["traces"], "traces", /^apps\/app: test\/drivers\/app\.ts: the program departs from the spec\n[\s\S]*conformance to spec\/app\/index\.md: (journey|model path|walk)[\s\S]*Saved as test\/counterexamples\/app\/[0-9a-f]{12}\.json, which/);
     const [saved, ...more] = fs.readdirSync(path.join(leaking, "apps/app/test/counterexamples/app"));
     assert.deepEqual(more, []);
     assert.match(departing.next, new RegExp(`^traces \\(apps/app\\) is the first ✗: it saved the counterexample test/counterexamples/app/${saved}\\. Decide which side is wrong`));
