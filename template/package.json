@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "turbo run dev //#studio",
     "studio": "spec studio",
+    "cli": "node packages/cli/src/main.ts",
     "check": "spec check",
     "gen": "spec gen",
     "accept": "spec accept",

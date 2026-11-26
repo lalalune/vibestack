@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "turbo run dev //#studio",
     "studio": "node packages/vibestack/src/spec.ts studio template",
+    "cli": "node template/packages/cli/src/main.ts",
     "check": "node packages/vibestack/src/spec.ts check template",
     "gen": "node packages/vibestack/src/spec.ts gen template",
     "accept": "node packages/vibestack/src/spec.ts accept template",

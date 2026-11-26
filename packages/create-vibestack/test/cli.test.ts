@@ -39,6 +39,7 @@ describe("create-vibestack CLI", () => {
 
     expect(readJson(path.join(target, "package.json"))).toMatchObject({
       name: "my-cool-app",
+      scripts: { cli: "node packages/cli/src/main.ts" },
       devDependencies: { vibestack: "catalog:" },
     });
     expect(workspace).toContain("vibestack: 0.2.0");
@@ -48,6 +49,27 @@ describe("create-vibestack CLI", () => {
     expect(fs.existsSync(path.join(target, "_gitignore"))).toBe(false);
     expect(fs.existsSync(path.join(target, "apps/app/.gitignore"))).toBe(true);
     expect(fs.existsSync(path.join(target, "spec/index.md"))).toBe(true);
+    expect(fs.existsSync(path.join(target, "packages/cli/src/main.ts"))).toBe(true);
+    const cliStatus = execFileSync(process.execPath, [path.join(target, "packages/cli/src/main.ts"), "status", "--json"], {
+      cwd: target,
+      encoding: "utf8",
+    });
+    expect(JSON.parse(cliStatus)).toMatchObject({
+      ok: true,
+      command: "status",
+      data: {
+        project: "my-cool-app",
+        packages: expect.arrayContaining([
+          expect.objectContaining({ name: "@repo/app" }),
+          expect.objectContaining({ name: "@repo/cli" }),
+        ]),
+      },
+    });
+    const cliHelp = execFileSync(process.execPath, [path.join(target, "packages/cli/src/main.ts"), "--help"], {
+      cwd: target,
+      encoding: "utf8",
+    });
+    expect(cliHelp).toContain("Usage: pnpm cli <command> [options]");
     expect(out).toContain("pnpm dev");
     expect(out).toContain("pnpm dlx vibestack-studio");
   });
@@ -64,7 +86,7 @@ describe("create-vibestack CLI", () => {
     const workspace = fs.readFileSync(path.join(target, "pnpm-workspace.yaml"), "utf8");
 
     expect(workspace).not.toMatch(/^\s*vibestack:/m);
-    for (const rel of ["package.json", "apps/app/package.json", "packages/ui/package.json", "packages/design-system/package.json"]) {
+    for (const rel of ["package.json", "apps/app/package.json", "packages/cli/package.json", "packages/ui/package.json", "packages/design-system/package.json"]) {
       expect(readJson(path.join(target, rel))).toMatchObject({
         devDependencies: { vibestack: expectedSpec },
       });

@@ -19,6 +19,7 @@ pnpm dev
 | --- | --- |
 | `pnpm dev` | Runs the app and launches Vibestack Studio |
 | `pnpm studio` | Opens Vibestack Studio (or run `pnpm dlx vibestack-studio`) |
+| `pnpm cli <command>` | Runs project CLI subcommands (`pnpm cli --help` lists commands; pass `--json` for structured output) |
 | `pnpm check` | Runs the full verification pipeline: model, simulation, proofs, types, tests, traces, review |
 | `pnpm gen` | Generates TypeScript, Effect adapters, and React hooks from `spec/` |
 | `pnpm accept` | Records reviewed rules in `spec/lock.json` |
@@ -34,5 +35,6 @@ pnpm dev
 | --- | --- |
 | `spec/` | Stories, rules, and Quint models (`spec/index.md` is the entry point) |
 | `apps/app/` | Starter React + VibeLang application wired to `spec/app/` |
+| `packages/cli/` | Project CLI (`pnpm cli <command>`) for verification, inspection, and operational subcommands |
 | `packages/design-system/` | Design tokens (`tokens.json`) and generated CSS theme |
 | `packages/ui/` | Shared Radix + Tailwind component library with Storybook metadata |

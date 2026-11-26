@@ -42,6 +42,10 @@ describe("the documents name what exists", () => {
       "apps/billing",
       "packages/billing",
       "apps/app",
+      "packages/cli",
+      "packages/cli/src/commands",
+      "packages/cli/src/commands/index.ts",
+      "packages/cli/test",
       "packages/ui",
       "packages/design-system",
       "packages/plugin-assistant",
@@ -268,7 +272,7 @@ describe("the documents name what exists", () => {
     }, {
       notWaiting: [
         "//#lint:css", "//#selftest:docs", "//#selftest:examples", "//#selftest:tools:a", "//#selftest:tools:b", "//#selftest:tools:rest",
-        "@repo/design-system#build", "@repo/site#build", "@repo/site#typecheck", "@repo/ui#typecheck",
+        "@repo/cli#test", "@repo/cli#typecheck", "@repo/design-system#build", "@repo/site#build", "@repo/site#typecheck", "@repo/ui#typecheck",
         "create-vibestack#build", "create-vibestack#test", "create-vibestack#typecheck",
         "vibestack#build", "vibestack#test", "vibestack#typecheck",
         "vibestack-studio#build", "vibestack-studio#dev", "vibestack-studio#test", "vibestack-studio#typecheck",

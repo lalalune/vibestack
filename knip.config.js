@@ -129,6 +129,20 @@ export default {
         "vibestack"
       ]
     },
+    "template/packages/cli": {
+      "entry": [
+        "src/main.ts",
+        "src/index.ts",
+        "test/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "vibestack"
+      ]
+    },
     "apps/*": {
       "project": [
         "src/**/*.{ts,tsx,vibe,vibex,css}"

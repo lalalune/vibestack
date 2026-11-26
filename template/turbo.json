@@ -86,6 +86,14 @@
     "@repo/design-system#build": {
       "dependsOn": ["^build"],
       "outputs": ["generated/**", "design.md"]
+    },
+    "@repo/cli#typecheck": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@repo/cli#test": {
+      "dependsOn": ["^build"],
+      "outputs": [".cache/test-result-*.json"]
     }
   }
 }
