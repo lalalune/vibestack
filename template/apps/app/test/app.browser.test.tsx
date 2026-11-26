@@ -4,6 +4,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { runModel } from "vibestack/testing";
+import * as greeterModel from "../gen/app.ts";
 import type { Machine } from "../gen/app.effect.vibe";
 import { useMachine } from "../gen/app.react.ts";
 import { App } from "../src/App.tsx";
@@ -34,11 +36,13 @@ async function open(search = "") {
   await act(() => Promise.resolve(root.render(<OpenedApp runtime={runtime} search={search} />)));
 }
 
-beforeAll(() => { environment.IS_REACT_ACT_ENVIRONMENT = true; });
-afterEach(async () => {
+async function cleanup() {
   for (const { root, runtime } of opened.splice(0)) { await act(() => Promise.resolve(root.unmount())); await runtime.dispose(); }
   localStorage.clear();
-});
+}
+
+beforeAll(() => { environment.IS_REACT_ACT_ENVIRONMENT = true; });
+afterEach(cleanup);
 afterAll(() => { environment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment; });
 
 const storedGreeter = (): unknown => JSON.parse(localStorage.getItem("greeter") ?? "null");
@@ -76,4 +80,51 @@ it("Say hello from a link, then one name after another, until the store is full"
   await act(() => userEvent.keyboard("Margaret{Enter}"));
   await expect.element(page.getByRole("alert")).toBeVisible();
   expect(storedGreeter()).toEqual({ name: "Grace", count: 3 });
+});
+
+// spec/app/index.md, "Story: Say hello"; spec/app/index.md, "Only a name that is not empty can be greeted, and a link greets only a name not greeted last"; spec/app/index.md, "The greeter can give a second greeting"
+it("Model-based traversal covers typed, linked, and refused greetings", async () => {
+  const report = await runModel(greeterModel, {
+    setup: async () => {
+      await cleanup();
+      await open("");
+      return undefined;
+    },
+    teardown: cleanup,
+    events: {
+      greet: async (event, _ctx, { allowed, by }) => {
+        if (by === "Linked") {
+          await open(linkTo(event.name));
+          return;
+        }
+        const name = page.getByRole("textbox", { name: "Name" });
+        const greet = page.getByRole("button", { name: "Greet" });
+        await act(() => userEvent.clear(name));
+        if (event.name) await act(() => userEvent.type(name, event.name));
+        if (!allowed) {
+          await expect.element(greet).toBeDisabled();
+          return;
+        }
+        await act(() => userEvent.click(greet));
+      },
+    },
+    assertState: async (state) => {
+      await expect.poll(storedGreeter).toEqual(state.count === 0 ? null : state);
+      await expect.element(page.getByRole("status", { name: "Shared greetings" })).toHaveTextContent(String(state.count));
+      await expect.element(page.getByRole("button", { name: "Greet" })).toBeDisabled();
+    },
+  }, {
+    events: [
+      { type: "greet", name: "", by: "Typed" },
+      { type: "greet", name: "Ada", by: "Linked" },
+      { type: "greet", name: "Ada", by: "Typed" },
+      { type: "greet", name: "Grace", by: "Linked" },
+    ],
+    strategy: "transitions",
+    predicates: { greetedTwice: greeterModel.sometimesGreetedTwice },
+    assertCoverage: true,
+  });
+
+  expect(report.paths).toBeGreaterThan(0);
+  expect(report.coverage.transitions).toEqual({ total: 1, accepted: ["greet"], refused: ["greet"], uncovered: [] });
 });

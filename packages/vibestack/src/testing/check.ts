@@ -79,7 +79,7 @@ function addVitest(root: string): string {
 /** What a module import reaches: generated code, a test library, or anything else (the shell, a service, a helper). */
 const reaches = (quoted: string) => {
   const module = quoted.replace(/^["'`]|["'`]$/g, "");
-  return /(?:^|\/)gen\//.test(module) ? "gen" : /^(?:vitest|@vitest\/.+|@effect\/vitest|effect(?:\/.+)?|node:test|node:assert(?:\/strict)?|assert|@testing-library\/.+)$/.test(module) ? "library" : "outside";
+  return /(?:^|\/)gen\//.test(module) ? "gen" : /^(?:vitest|@vitest\/.+|@effect\/vitest|effect(?:\/.+)?|node:test|node:assert(?:\/strict)?|assert|@testing-library\/.+|vibestack\/testing(?:\/.+)?)$/.test(module) ? "library" : "outside";
 };
 
 /**

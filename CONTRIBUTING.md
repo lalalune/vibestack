@@ -80,8 +80,8 @@ Pull requests go to `main`, the only long-lived branch; what CI runs on them is 
 | `packages/vibestack/src/std/` | specs that ship with the tools, which any spec may import, each with its proof file |
 | `packages/vibestack/src/conform.ts` | the `traces` stage and `spec conformance`: drivers, each in a Node of its own, `driver:` programs and recorded traces; saved counterexamples; the driver stub |
 | `packages/vibestack/src/explore.ts` | the `explore` stage and `spec explore`: serves a package's page with its app script, runs Bombadil on it, and replays and removes a saved run |
-| `packages/vibestack/src/conformance.ts` | the comparing: journeys, malformed-input probes, walks, shrinking and replay; copied into `gen/` for a driver's types |
-| `packages/vibestack/src/testing/` | what packages import via `vibestack/testing*`: `project()` (the Vitest configuration), the property-test generator, `effectDriver` |
+| `packages/vibestack/src/conformance.ts` | the comparing: journeys, deterministic model-based path planning (`planModel`), malformed-input probes, walks, shrinking and replay; copied into `gen/` for a driver's types |
+| `packages/vibestack/src/testing/` | what packages import via `vibestack/testing*`: `project()` (the Vitest configuration), the property-test generator, `effectDriver`, `planModel`, `runModel` |
 | `packages/vibestack/src/stories/`, `packages/vibestack/src/design/` | generated stories and their tests; design tokens and their lint rules. The design project module in [`packages/vibestack/src/design/project.ts`](packages/vibestack/src/design/project.ts) builds or checks several token directories in one process |
 | `packages/vibestack/src/eslint.ts` | `withWorkspaceBarrels` and `vibestackConfig`: ESLint rules enforcing barrel-only workspace `exports` and imports plus a reusable downstream preset |
 | `packages/vibestack/src/formal.ts` | `vibestack/formal`: `check`, `conformance`, `explore`, `precomputeSimulations`, `prepareSimulationReceipts`, `readSpecs`, `withFormalCache`, `show` |
@@ -382,7 +382,7 @@ failing exploration found is saved and replayed instead
 | Kind | Checks | Source or example |
 |---|---|---|
 | Formal | Rules and laws for every state and input | `template/spec/app/`; `.proof.dfy` where Dafny needs help, such as `template/spec/app/echo.proof.dfy` and `src/greeting.proof.dfy` |
-| Model-based | Real shell against the spec: journeys, malformed input, walks and saved counterexamples | `test/drivers/app.ts` and the recorded `test/traces/app.jsonl`, run by `traces` |
+| Model-based | Real shell or UI against the spec: journeys, deterministic transition-covering paths (accepted and refused), malformed input, walks and saved counterexamples | `test/drivers/app.ts` and `test/traces/app.jsonl`, run by `traces`; `planModel` and `runModel` from `vibestack/testing` in Vitest Node and browser tests (`test/app.browser.test.tsx`) |
 | Journey/integration | A story through real services, including what a driver cannot see | `@effect/vitest` in `test/app.test.vibe`: reload from storage |
 | Component/browser | Story interactions and accessibility; browser-only behavior such as focus and storage | Component metadata `play`; `test/app.browser.test.tsx` in Chromium |
 | Exploratory/browser | The served page under random clicks, typing, scrolling and reloads: no uncaught error, console error or failed request, and the properties each rule gives the page, in every state reached | `test/bombadil.ts`, or nothing for Bombadil's defaults; `template/apps/app/test/bombadil.ts`, run by `explore` |
