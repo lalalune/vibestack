@@ -485,18 +485,7 @@ async function typecheck(memory: Memory, root: string, dir: string, compiler: "v
       return { ok: true, out: "" };
     }
     const snapshot = configuredSnapshot(at);
-    const currentConfigured = contents(snapshot.files);
-    if (sameEntries(passed.configured, currentConfigured)) {
-      if (snapshot.safeSkip && kept) {
-        store(memory, kept, {
-          read: passed.read,
-          configured: currentConfigured,
-          safeSkip: true,
-          watched: stamps(snapshot.watched),
-        } satisfies TypecheckCache);
-      }
-      return { ok: true, out: "" };
-    }
+    if (sameEntries(passed.configured, contents(snapshot.files))) return { ok: true, out: "" };
   }
   const r = await run(compiler, ["--noEmit", "--listFiles", "-p", "."], at);
   const lines = r.out.split("\n");

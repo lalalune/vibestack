@@ -187,7 +187,7 @@ export async function search(harness: Harness, invariant: string, step = "step",
     }
   }
   let run!: Awaited<ReturnType<typeof simulate>>;
-  for (const { steps, budget } of searches) if ((run = await simulate(harness, invariant, 1, budget, step, budget >= 2 * SHARD_SAMPLES, steps, seed)).broken) break;
+  for (const { steps, budget } of searches) if ((run = await simulate(harness, invariant, 1, budget, step, false, steps, seed)).broken) break;
   return run;
 }
 const SEARCHED = `${WITNESS_SAMPLES} traces of ${STEPS} events and longer ones up to ${DEPTHS.at(-1)}`;
