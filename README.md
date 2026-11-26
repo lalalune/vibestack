@@ -136,6 +136,7 @@ Configure Vibestack in an optional root `vibestack.json` (or under `"vibestack"`
 | `pnpm gen [<dir>]` | Generates `gen/` only |
 | `pnpm accept [<dir>]` | User sign-off: checks afresh and records reviewed rules in `spec/lock.json` |
 | `pnpm new [<path>]` | Fills an empty root spec or creates a starter `spec/<path>/index.md` |
+| `pnpm cli <command> [--json]` | Runs project CLI subcommands (`packages/cli`); `pnpm cli --help` lists registered levers |
 | `pnpm quick` | Fast local types, lint, and tests of changed packages |
 | `pnpm verify` | Full CI suite: build, types, tests, browser tests, checks, lint, analyze, selftests |
 
@@ -158,7 +159,7 @@ Each example is a standalone project consuming `vibestack` as a package:
 | `packages/studio` | Published as `vibestack-studio`: standalone Vibestack Studio server and prebuilt React UI |
 | `packages/create-vibestack` | Published as `create-vibestack`: project scaffolder bundling `template/` |
 | `apps/site` | Marketing landing page deployed to [vibestack.fun](https://vibestack.fun) |
-| `template/` | Starter workspace (`template/apps/app`, `template/packages/design-system`, `template/packages/ui`, `template/spec/`) |
+| `template/` | Starter workspace (`template/apps/app`, `template/packages/cli`, `template/packages/design-system`, `template/packages/ui`, `template/spec/`) |
 | `examples/` | Standalone example applications (`examples/order`, `examples/dashboard`, `examples/fullstack`, `examples/assistant`) |
 | `selftest/` | Tool self-tests, docs/example checks, and spec fixtures |
 | `.agents/skills/` | Canonical agent skills and references |

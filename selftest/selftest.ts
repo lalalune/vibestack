@@ -3352,7 +3352,7 @@ function eachCheck() {
     assert.ok(!fs.existsSync(path.join(copy, "packages/studio/.spec-cache/lock")));
     assert.ok(!fs.existsSync(path.join(copy, "node_modules")));
     assert.equal(read("packages/vibestack/src/gen/typescript.ts", copy), read("packages/vibestack/src/gen/typescript.ts"));
-    for (const directory of ["packages/vibestack", "packages/studio", "packages/create-vibestack", "template/packages/ui", "template/packages/design-system"])
+    for (const directory of ["packages/vibestack", "packages/studio", "packages/create-vibestack", "template/packages/cli", "template/packages/ui", "template/packages/design-system"])
       for (const output of ["gen", "dist", "generated", "node_modules", ".spec-cache", ".cache", ".vibe", ".turbo", "storybook-static"])
         assert.ok(!fs.existsSync(path.join(copy, directory, output)), `${directory}/${output} is produced by the scratch build`);
     const modulesManifest = path.join(nodeModules, ".modules.yaml");
@@ -3408,6 +3408,7 @@ function eachCheck() {
     assert.equal((await exec("tar", ["-xzf", createArchive, "--strip-components", "1", "-C", createUnpacked], copy)).status, 0);
     assert.ok(fs.existsSync(path.join(createUnpacked, "dist/cli.js")));
     assert.ok(fs.existsSync(path.join(createUnpacked, "template/package.json")));
+    assert.ok(fs.existsSync(path.join(createUnpacked, "template/packages/cli/src/main.ts")));
 
     fs.mkdirSync(path.join(installed, "node_modules"));
     for (const entry of fs.readdirSync(nodeModules).filter((name) => name !== ".bin"))

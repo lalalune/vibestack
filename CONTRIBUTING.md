@@ -11,7 +11,7 @@ Everything is built on [the stack](AGENTS.md#the-stack): Node 26, pnpm, VibeLang
 | `packages/vibestack/` | the `vibestack` npm package (`vibestack` and `spec` CLIs, formal/testing/stories/design/eslint/chromium/config exports, and bundled agent assets) |
 | `packages/studio/` | the standalone `vibestack-studio` npm package (bundled Node server and prebuilt React UI, zero runtime dependencies) |
 | `packages/create-vibestack/` | the `create-vibestack` npm scaffolder (`pnpm create vibestack`), bundling `template/` |
-| `template/` | the clean starter workspace (`template/apps/app`, `template/packages/ui`, `template/packages/design-system`, `template/spec/`) |
+| `template/` | the clean starter workspace (`template/apps/app`, `template/packages/cli`, `template/packages/ui`, `template/packages/design-system`, `template/spec/`) |
 | `examples/` | standalone projects (`examples/order`, `examples/dashboard`, `examples/fullstack`, `examples/assistant`), each consuming `vibestack` as a package; never part of the workspace |
 | `selftest/` | tool self-tests (`selftest/selftest.ts`, `selftest/docs.ts`, `selftest/examples.ts`) and spec fixtures (`selftest/fixtures/`); never shipped downstream |
 
@@ -42,7 +42,7 @@ application again each time.
 A package joins by having a script named `gen`, `build`, `typecheck`, `test`, `test:browser` or `check`. Its other
 tasks wait for its `gen` and the root's, and its `check` for all of them, since `check` rewrites `gen/`. A package that
 can never own a root spec waits for no root `gen`, so a spec edit leaves its tasks cached: Studio, which has a `spec/`
-of its own, and `@repo/design-system` and `@repo/ui`, which have no `spec/<name>/`; `@repo/ui`'s tests still wait for
+of its own, and `@repo/cli`, `@repo/design-system` and `@repo/ui`, which have no `spec/<name>/`; `@repo/ui`'s tests still wait for
 its stories, whose `@model` tags read the root's `gen/`. Studio's tests wait for its page build and are keyed by its
 files and the `selftest/fixtures/` they read, besides the tools every task is keyed by. The root's
 `check` rewrites its owners' `gen/` too, so it waits for their tasks: name each owner's in `//#check` of `turbo.json`,

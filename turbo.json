@@ -554,6 +554,20 @@
         "design.md"
       ]
     },
+    "@repo/cli#typecheck": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "@repo/cli#test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        ".cache/test-result-*.json"
+      ]
+    },
     "@repo/site#build": {
       "dependsOn": [
         "^build"

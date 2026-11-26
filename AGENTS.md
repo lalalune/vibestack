@@ -174,8 +174,15 @@ Check each point before you write, and again after.
   `console`. An `eslint-disable` there names its rules, never `code/*`,
   `barrel/*` or `no-console`, and says why; any other inline config fails the
   lint.
-- **Scripts and tests.** Extend existing ones before adding; no new scripts.
-  Delete code that becomes unused. Tests follow "Tests" below.
+- **Scripts, project CLI and tests.** Put operational, verification, seeding,
+  inspection, validation, and migration levers in the project CLI
+  (`packages/cli`, run with `pnpm cli <command>`) as typed subcommands with
+  `--json` output rather than ad-hoc files under `scripts/` or extra
+  `package.json` scripts. `packages/cli` is a project tool (Node 26 TypeScript
+  by default for fast startup across all modes; subcommands that drive
+  VibeLang/Effect services can invoke or import them when needed). Extend
+  existing commands and tests before adding; delete code that becomes unused.
+  Tests follow "Tests" below.
 - **Speed.** Keep checks and CI fast: a small change reruns only what it
   touches; a full run is as quick as it can be.
 - **Passes.** The first version is a draft. Review it two or three times
@@ -212,8 +219,9 @@ its name.
   with no precedent. Build 2-3 competing prototypes and compare before
   committing.
 - **Build the Lever.** Any non-trivial work. Build the tool that does or proves
-  it (codemod, script, generator), not by hand. The tool is the artifact a
-  reviewer reruns.
+  it — as a subcommand in the project CLI (`pnpm cli <command>`, under
+  `packages/cli`) with `--json` output when it belongs to the project, not as a
+  scattered script. The tool is the artifact a reviewer reruns.
 - **Model the Domain.** Writing stateful logic, or code that branches a lot or
   repeats a shape assumption across files. Encode the domain in a structure
   (state machine, typed model, table or registry, reducer, boundary, the right
