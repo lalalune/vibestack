@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { before, describe, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 import { entry, recall, store } from "../../packages/vibestack/src/cache.ts";
 import { bin, exec } from "../../packages/vibestack/src/run.ts";
 import { sha } from "../../packages/vibestack/src/util.ts";
@@ -46,12 +47,18 @@ export async function exampleCheckKeys(root: string, turbo: string): Promise<Map
   return new Map([...examples].map(([name, owned]) => [name, sha(shared, JSON.stringify(owned))]));
 }
 
-if (import.meta.main) describe("the standalone examples", () => {
+if (import.meta.main) describe("the standalone examples", { concurrency: Math.min(4, os.availableParallelism()) }, () => {
   isolatedInstalls();
   const project = path.resolve(import.meta.dirname, "../..");
   const turbo = () => bin("turbo", project);
   let keys: Map<string, string> | undefined;
-  before(async () => { if (process.env.TURBO_HASH) keys = await exampleCheckKeys(project, turbo()); });
+  const completed: { name: string; key: string; memory: { root: string; fresh: boolean; used: Set<string> }; receipt: Awaited<ReturnType<typeof entry>> }[] = [];
+  before(async () => { keys = await exampleCheckKeys(project, turbo()); });
+  after(async () => {
+    if (!completed.length) return;
+    const current = await exampleCheckKeys(project, turbo());
+    for (const item of completed) if (current.get(item.name) === item.key) store(item.memory, item.receipt, true);
+  });
   for (const name of fs.readdirSync(path.join(project, EXAMPLES)).sort())
     test(`the ${name} example installs from its own lock file and passes its check, its page explored where it has one`, async (context) => {
       const example = path.join(project, EXAMPLES, name);
@@ -67,6 +74,6 @@ if (import.meta.main) describe("the standalone examples", () => {
       assert.equal(installed.status, 0, installed.stdout + installed.stderr);
       const checked = await exec(pnpm, ["check"], example);
       assert.equal(checked.status, 0, `${checked.stdout}${checked.stderr}`.trim().split("\n").slice(-80).join("\n"));
-      if (receipt && (await exampleCheckKeys(project, turbo())).get(name) === key) store(memory, receipt, true);
+      if (receipt && key) completed.push({ name, key, memory, receipt });
     });
 });

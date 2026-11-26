@@ -12,7 +12,7 @@
       "outputs": ["gen/**", "generated/**"]
     },
     "@repo/ui#gen": {
-      "dependsOn": ["//#gen"],
+      "dependsOn": ["//#gen", "^build"],
       "outputs": ["generated/**"]
     },
     "build": {
@@ -25,13 +25,11 @@
     },
     "test": {
       "dependsOn": ["gen", "//#gen", "^build"],
-      "outputs": [".cache/test-result-*.json"],
-      "env": ["VIBESTACK_QUINT_EVALUATOR"]
+      "outputs": [".cache/test-result-*.json"]
     },
     "test:browser": {
       "dependsOn": ["gen", "//#gen", "^build"],
-      "outputs": [],
-      "env": ["VIBESTACK_QUINT_EVALUATOR"]
+      "outputs": []
     },
     "check": {
       "dependsOn": ["build", "typecheck", "test", "test:browser"],
@@ -44,14 +42,13 @@
     },
     "//#typecheck": {
       "dependsOn": ["//#gen"],
-      "inputs": ["package.json", "tsconfig.json", "spec/**", "src/**", "test/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**", "!**/.DS_Store"],
+      "inputs": ["package.json", "tsconfig.json", "spec/**", "src/**", "test/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**", "!**/.DS_Store", "!**/*.{md,dfy,qnt}"],
       "outputs": []
     },
     "//#test": {
       "dependsOn": ["//#gen", "^build"],
       "inputs": ["package.json", "vitest.config.ts", "spec/**", "!spec/**/*.md", "src/**", "test/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**", "!**/.DS_Store"],
-      "outputs": [".cache/test-result-*.json"],
-      "env": ["VIBESTACK_QUINT_EVALUATOR"]
+      "outputs": [".cache/test-result-*.json"]
     },
     "//#check": {
       "dependsOn": ["//#typecheck", "//#test", "@repo/app#build", "@repo/app#typecheck", "@repo/app#test", "@repo/app#test:browser"],
@@ -59,7 +56,7 @@
     },
     "//#lint:js": {
       "dependsOn": ["@repo/design-system#build", "@repo/app#typecheck"],
-      "inputs": ["apps/**", "packages/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**", "!**/.DS_Store", "!{apps,packages}/**/gen/**", "package.json", "pnpm-workspace.yaml", "tsconfig.json", "*.config.js", "*.config.ts"],
+      "inputs": ["src/**", "test/**", "apps/**", "packages/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**", "!**/.DS_Store", "!**/*.{md,dfy,qnt}", "!**/spec/**", "!{apps,packages}/**/gen/**", "package.json", "pnpm-workspace.yaml", "tsconfig.json", "*.config.js", "*.config.ts"],
       "outputs": []
     },
     "//#lint:css": {
@@ -93,6 +90,7 @@
     },
     "@repo/cli#test": {
       "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/package.json", "$TURBO_ROOT$/spec/**/*.md", "$TURBO_ROOT$/apps/*/package.json", "$TURBO_ROOT$/packages/*/package.json"],
       "outputs": [".cache/test-result-*.json"]
     }
   }

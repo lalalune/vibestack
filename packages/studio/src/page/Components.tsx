@@ -10,7 +10,7 @@ import { initial, type Event } from "../../gen/components.ts";
 import type { RuleMeta, RuleRole, SimResult, SpecModelGraph } from "../graph.ts";
 import type { Component, ComponentIndex, Prop, Story } from "../../../vibestack/src/stories/emit.ts";
 import {
-  S, fetchPreview, graphOf, isDarkTheme, openComponent, openStateFocus, postSim, reveal, select, useStudio,
+  S, cachedPreview, fetchPreview, graphOf, isDarkTheme, openComponent, openStateFocus, postSim, reveal, select, useStudio,
 } from "./studio.ts";
 import { CollapsibleSection, Dot, Icon, IconButton, InlineMarkdown, InspectorToggle, Tooltip } from "./text.tsx";
 
@@ -149,7 +149,7 @@ export function buildStageArgs(
 }
 
 export function usePreviewHost(): PreviewInfo {
-  const [info, setInfo] = useState<PreviewInfo>({ url: null, mode: "none" });
+  const [info, setInfo] = useState<PreviewInfo>(() => cachedPreview() ?? { url: null, mode: "none" });
   useEffect(() => {
     let active = true;
     fetchPreview().then(
@@ -163,40 +163,47 @@ export function usePreviewHost(): PreviewInfo {
 
 export function useModelSim(moduleName: string | undefined) {
   const [result, setResult] = useState<{ module: string; sim: SimResult } | undefined>();
-  const [busy, setBusy] = useState(false);
+  const [busyState, setBusyState] = useState<{ module: string; token: object } | undefined>();
+  const reqRef = useRef(0);
+  const busyRef = useRef(false);
 
   useEffect(() => {
-    if (!moduleName) return;
-    let active = true;
+    const req = ++reqRef.current;
+    busyRef.current = false;
+    let cancelled = false;
+    if (!moduleName) return () => { cancelled = true; };
     postSim({ module: moduleName }).then(
-      (sim) => { if (active) setResult({ module: moduleName, sim }); },
-      () => { if (active) setResult({ module: moduleName, sim: { available: false, module: moduleName } }); },
+      (sim) => { if (!cancelled && reqRef.current === req) setResult({ module: moduleName, sim }); },
+      () => { if (!cancelled && reqRef.current === req) setResult({ module: moduleName, sim: { available: false, module: moduleName } }); },
     );
-    return () => { active = false; };
+    return () => { cancelled = true; };
   }, [moduleName]);
 
   const sim = moduleName && result?.module === moduleName ? result.sim : undefined;
+  const busy = Boolean(moduleName && busyState?.module === moduleName);
+
+  const runSimRequest = async (body: { module: string; state?: unknown; event?: unknown; by?: unknown }) => {
+    const req = ++reqRef.current;
+    const token = {};
+    busyRef.current = true;
+    setBusyState({ module: body.module, token });
+    try {
+      const next = await postSim(body);
+      if (reqRef.current === req) setResult({ module: body.module, sim: next });
+    } finally {
+      if (reqRef.current === req) busyRef.current = false;
+      setBusyState((cur) => (cur?.token === token ? undefined : cur));
+    }
+  };
 
   const step = async (event: unknown, by?: unknown) => {
-    if (!moduleName || !sim?.available) return;
-    setBusy(true);
-    try {
-      const next = await postSim({ module: moduleName, state: sim.state, event, by });
-      setResult({ module: moduleName, sim: next });
-    } finally {
-      setBusy(false);
-    }
+    if (!moduleName || !sim?.available || busyRef.current) return;
+    await runSimRequest({ module: moduleName, state: sim.state, event, by });
   };
 
   const reset = async () => {
     if (!moduleName) return;
-    setBusy(true);
-    try {
-      const next = await postSim({ module: moduleName });
-      setResult({ module: moduleName, sim: next });
-    } finally {
-      setBusy(false);
-    }
+    await runSimRequest({ module: moduleName });
   };
 
   return { sim, busy, step, reset };
@@ -420,6 +427,21 @@ export function LivePreviewStage({
   );
   const propNames = useMemo(() => target.props.map((p) => p.name), [target.props]);
 
+  const previewOrigin = useMemo(() => {
+    if (preview.mode !== "embedded" || !preview.url) return undefined;
+    try { return new URL(preview.url).origin; } catch { return undefined; }
+  }, [preview.mode, preview.url]);
+  const embeddedSrc = useMemo(() => {
+    if (preview.mode !== "embedded" || !preview.url) return undefined;
+    try {
+      const url = new URL(preview.url);
+      url.searchParams.set("origin", window.location.origin);
+      return url.toString();
+    } catch {
+      return preview.url;
+    }
+  }, [preview.mode, preview.url]);
+
   const payloadRef = useRef({
     file: target.source.file,
     name: target.name,
@@ -440,22 +462,23 @@ export function LivePreviewStage({
       inspect,
       theme,
     };
-    if (readyRef.current) {
-      iframeRef.current?.contentWindow?.postMessage({ type: "studio:preview", ...payloadRef.current }, "*");
+    if (readyRef.current && previewOrigin) {
+      iframeRef.current?.contentWindow?.postMessage({ type: "studio:preview", ...payloadRef.current }, previewOrigin);
     }
-  }, [target.source.file, target.name, args, propNames, allChildren, inspect, theme]);
+  }, [target.source.file, target.name, args, propNames, allChildren, inspect, theme, previewOrigin]);
 
   const selectComponent = useEffectEvent((name: string) => onSelectComponent?.(name));
   const sendAction = useEffectEvent((prop: string, actionArgs: unknown[]) => onAction?.(prop, actionArgs));
   useEffect(() => {
-    if (preview.mode !== "embedded" || !preview.url) return;
+    if (preview.mode !== "embedded" || !previewOrigin) return;
     const onMsg = (ev: MessageEvent) => {
-      if (iframeRef.current?.contentWindow && ev.source !== iframeRef.current.contentWindow) return;
+      const frameWindow = iframeRef.current?.contentWindow;
+      if (!frameWindow || ev.source !== frameWindow || ev.origin !== previewOrigin) return;
       const data = ev.data as { type?: string; componentName?: string; prop?: string; args?: unknown[] } | null;
       if (!data || typeof data !== "object") return;
       if (data.type === "studio:ready") {
         readyRef.current = true;
-        iframeRef.current?.contentWindow?.postMessage({ type: "studio:preview", ...payloadRef.current }, "*");
+        frameWindow.postMessage({ type: "studio:preview", ...payloadRef.current }, previewOrigin);
       } else if (data.type === "studio:select" && typeof data.componentName === "string") {
         selectComponent(data.componentName);
       } else if (data.type === "studio:action" && typeof data.prop === "string") {
@@ -467,7 +490,7 @@ export function LivePreviewStage({
       readyRef.current = false;
       window.removeEventListener("message", onMsg);
     };
-  }, [preview.mode, preview.url]);
+  }, [preview.mode, previewOrigin]);
 
   const frameClass = cn(
     "w-full rounded-lg border border-border bg-card transition-all duration-fast",
@@ -475,13 +498,13 @@ export function LivePreviewStage({
     viewport === "mobile" && "mx-auto max-w-sm",
   );
 
-  if (preview.mode === "embedded" && preview.url) {
+  if (preview.mode === "embedded" && embeddedSrc) {
     return (
       <div className={cn("w-full", viewport === "mobile" && "mx-auto max-w-sm")}>
         <iframe
           ref={iframeRef}
           title={`${target.name}: ${story?.name ?? "Preview"}`}
-          src={preview.url}
+          src={embeddedSrc}
           className={frameClass}
         />
       </div>
@@ -874,9 +897,10 @@ export function dispatchPreviewAction(
   actionArgs: unknown[],
   sim: SimResult | undefined,
   step: (event: unknown, by?: unknown) => Promise<void>,
+  busy = false,
 ): string {
   const summary = `${prop}(${actionArgs.map((a) => JSON.stringify(a)).join(", ")})`;
-  if (prop === "onOnline" && typeof actionArgs[0] === "boolean" && sim?.available) {
+  if (!busy && prop === "onOnline" && typeof actionArgs[0] === "boolean" && sim?.available) {
     const targetName = actionArgs[0] ? "goOnline" : "goOffline";
     const ev = sim.enabledEvents?.find((e) => e.name === targetName && e.allowed);
     if (ev) void step(ev.sampleEvent, ev.sender);
@@ -979,7 +1003,7 @@ function LayoutViewer({
   );
 
   const handleAction = (prop: string, actionArgs: unknown[]) => {
-    setLastAction(dispatchPreviewAction(prop, actionArgs, sim, step));
+    setLastAction(dispatchPreviewAction(prop, actionArgs, sim, step, busy));
   };
 
   return (

@@ -13,7 +13,7 @@ Everything is built on [the stack](AGENTS.md#the-stack): Node 26, pnpm, VibeLang
 | `packages/create-vibestack/` | the `create-vibestack` npm scaffolder (`pnpm create vibestack`), bundling `template/` |
 | `template/` | the clean starter workspace (`template/apps/app`, `template/packages/cli`, `template/packages/ui`, `template/packages/design-system`, `template/spec/`) |
 | `examples/` | standalone projects (`examples/order`, `examples/dashboard`, `examples/fullstack`, `examples/assistant`), each consuming `vibestack` as a package; never part of the workspace |
-| `selftest/` | tool self-tests (`selftest/selftest.ts`, `selftest/docs.ts`, `selftest/examples.ts`) and spec fixtures (`selftest/fixtures/`); never shipped downstream |
+| `selftest/` | tool self-tests (`selftest/selftest.ts`, `selftest/selftests/docs.ts`, `selftest/selftests/examples.ts`) and spec fixtures (`selftest/fixtures/`); never shipped downstream |
 
 The specs of every package are in the one tree at the root ([SPEC.md, "One spec tree"](SPEC.md#one-spec-tree));
 [Architecture](#architecture) maps what is generated from what, which test is for what, and the
@@ -92,7 +92,7 @@ Pull requests go to `main`, the only long-lived branch; what CI runs on them is 
 | `packages/vibestack/src/gen/secrecy.ts` | where a secret may go |
 | `packages/vibestack/src/gen/typescript.ts`, `packages/vibestack/src/gen/harness.ts` | `gen/<name>.ts`, and the Quint module `gen/<name>.run.qnt` that simulation runs |
 | `selftest/selftest.ts`, `selftest/fixtures/` | the tool selftest and the specs it uses besides the order example |
-| `selftest/docs.ts`, `selftest/examples.ts` | the docs and standalone example selftests, and helpers in `selftest/` |
+| `selftest/selftests/docs.ts`, `selftest/selftests/examples.ts` | the docs and standalone example selftests, and helpers in `selftest/` |
 
 Node runs all of it directly; `pnpm build` builds `packages/vibestack`, `packages/studio`, and `packages/create-vibestack`.
 
@@ -285,7 +285,7 @@ The install command runs its listed root prerequisite tasks together before gene
 The tooling package sets `--skip-gen-on-pack` in its prepare script. A
 `pnpm pack` still builds the CLI and Studio. It skips the application's
 generated models, which the tools' tarball does not contain.
-The three tool selftest jobs in `ci.yml` run only the listed `//#build` task and generate their scratch
+The three tool selftest jobs in `ci.yml` run only the listed `vibestack#build` task and generate their scratch
 projects on demand. The packaged CLI test rebuilds from a clean copy of the
 workspace. The nightly check builds the tools during install and generates the
 application in its nightly task graph. Other GitHub Actions jobs use the same strict root

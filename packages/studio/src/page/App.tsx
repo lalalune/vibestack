@@ -19,7 +19,7 @@ export function App() {
   const openPublish = () => { if (!S.publishing && can({ type: "publish", changes: 0 })) setPublishing(true); };
 
   useEffect(() => {
-    connect();
+    const disconnect = connect();
     const keys = (e: KeyboardEvent) => {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName ?? "");
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); openPublish(); }
@@ -39,7 +39,7 @@ export function App() {
     const leaving = (e: BeforeUnloadEvent) => { if (dirtySpecs().length) e.preventDefault(); };
     document.addEventListener("keydown", keys);
     window.addEventListener("beforeunload", leaving);
-    return () => { document.removeEventListener("keydown", keys); window.removeEventListener("beforeunload", leaving); };
+    return () => { disconnect(); document.removeEventListener("keydown", keys); window.removeEventListener("beforeunload", leaving); };
   }, []);
 
   const spec = current();

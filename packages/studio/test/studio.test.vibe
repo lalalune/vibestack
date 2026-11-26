@@ -354,13 +354,19 @@ describe.concurrent("Studio through its server, its files and a browser", () => 
     // The simulation loads the project's generated module, which only Studio's own program can: `spec studio`, as a person starts it.
     const child = try spawner.spawn(ChildProcess.make(NODE, [`${TOOLS}/spec.ts`, "studio", "--port", "0"], { cwd: root }))
     const line = try Stream.runHead(Stream.filter(Stream.splitLines(Stream.decodeText(child.stdout)), (l) => l.startsWith("studio: ")))
-    const { page, on } = try browse(Option.getOrThrow(line).match(/studio: (http:\/\/localhost:\d+)/)![1].replace("localhost", "127.0.0.1"))
+    const studioUrl = Option.getOrThrow(line).match(/studio: (http:\/\/localhost:\d+)/)![1].replace("localhost", "127.0.0.1")
+    const { page, on } = try browse(studioUrl)
     try on(() => page.getByRole("tab", { name: "Split", exact: true }).click())
     const shown = () => page.frameLocator("iframe").getByRole("status")
     const before = try on(() => shown().innerText())
     try on(() => page.getByRole("button", { name: "▶ setAlarm", exact: true }).click())
     try on(() => shown().filter({ hasText: "alarm on" }).waitFor({ timeout: 15_000 }))
-    try check(() => assert.deepStrictEqual({ generated, before }, { generated: 0, before: "alarm off" }))
+    const api = try client(studioUrl)
+    const previewInfo = (try api.get("/api/preview?project=.")).body as { url: string }
+    const previewApi = try client(previewInfo.url.replace(/\/$/, ""))
+    const traversal = (try previewApi.get("/@studio-preview/meta?file=../../package.json")).body as { metaFile: string | null }
+    const crossOrigin = (try previewApi.get("/@studio-preview/meta?file=src/DoorView.tsx", { origin: "https://evil.example" })).status
+    try check(() => assert.deepStrictEqual({ generated, before, traversal: traversal.metaFile, crossOrigin }, { generated: 0, before: "alarm off", traversal: null, crossOrigin: 403 }))
   }) } }, 120_000)
 
   // spec/index.md, "Story: Edit, then publish"

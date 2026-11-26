@@ -1,5 +1,5 @@
 // Interactive state machine viewer, live simulator and structural transition composer for a spec's model graph.
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button, EmptyState, Input, Label, cn, focusRing } from "@repo/ui";
 import type { GraphEdge, GraphNode, SimResult, SpecModelGraph } from "../graph.ts";
 import { itemsOf, ruleKey } from "../markdown.ts";
@@ -1577,10 +1577,12 @@ export function StateGraph({ spec, graph }: { spec: Working; graph: SpecModelGra
   const [savedInspector, setSavedInspector] = useState<{ forKey: string; mode: InspectorMode } | undefined>(undefined);
   const [draftEdge, setDraftEdge] = useState<DraftEdge | undefined>(undefined);
   const [simEntry, setSimEntry] = useState<{ module: string; state: SimState } | undefined>(undefined);
-  const [stepping, setStepping] = useState(false);
+  const [steppingState, setSteppingState] = useState<{ module: string; token: object } | undefined>(undefined);
   const [paramDrafts, setParamDrafts] = useState<Record<string, string>>({});
+  const simReqRef = useRef(0);
 
   const moduleName = graph?.module ?? S.snap?.specs.find((s) => s.file === spec.file)?.module;
+  const stepping = Boolean(moduleName && steppingState?.module === moduleName);
   const inspector = savedInspector?.forKey === focusKey
     ? savedInspector.mode
     : defaultInspectorFor(graph, S.focusNode, S.focusEdge);
@@ -1590,24 +1592,22 @@ export function StateGraph({ spec, graph }: { spec: Working; graph: SpecModelGra
     if (mode.kind !== "compose-transition") setDraftEdge(undefined);
   };
 
+  const toSimState = (data: SimResult, stepCount: number): SimState =>
+    data.available ? { kind: "ready", data, stepCount } : { kind: "unavailable", reason: data.error };
+
   const isLibrary = !graph || graph.projectionKind === "library";
   useEffect(() => {
-    if (!moduleName || isLibrary) return;
+    const req = ++simReqRef.current;
     let cancelled = false;
+    if (!moduleName || isLibrary) return () => { cancelled = true; };
     void postSim({ module: moduleName }).then(
       (data) => {
-        if (cancelled) return;
-        setSimEntry({
-          module: moduleName,
-          state: data.available ? { kind: "ready", data, stepCount: 0 } : { kind: "unavailable", reason: data.error },
-        });
+        if (!cancelled && simReqRef.current === req) setSimEntry({ module: moduleName, state: toSimState(data, 0) });
       },
       (err: unknown) => {
-        if (cancelled) return;
-        setSimEntry({
-          module: moduleName,
-          state: { kind: "unavailable", reason: err instanceof Error ? err.message : undefined },
-        });
+        if (!cancelled && simReqRef.current === req) {
+          setSimEntry({ module: moduleName, state: { kind: "unavailable", reason: err instanceof Error ? err.message : undefined } });
+        }
       },
     );
     return () => { cancelled = true; };
@@ -1642,8 +1642,21 @@ export function StateGraph({ spec, graph }: { spec: Working; graph: SpecModelGra
     setInspectorOpen(true);
   };
 
+  const runGraphSim = (body: { module: string; state?: unknown; event?: unknown; by?: unknown }, nextSteps: number) => {
+    const req = ++simReqRef.current;
+    const token = {};
+    setSteppingState({ module: body.module, token });
+    void postSim(body).then(
+      (data) => {
+        setSteppingState((cur) => (cur?.token === token ? undefined : cur));
+        if (simReqRef.current === req) setSimEntry({ module: body.module, state: toSimState(data, nextSteps) });
+      },
+      () => setSteppingState((cur) => (cur?.token === token ? undefined : cur)),
+    );
+  };
+
   const handleStep = (ev: NonNullable<SimResult["enabledEvents"]>[number]) => {
-    if (!moduleName || sim.kind !== "ready") return;
+    if (!moduleName || sim.kind !== "ready" || stepping) return;
     const edge = graph.edges.find((e) => e.name === ev.name);
     const eventPayload: Record<string, unknown> = { ...(ev.sampleEvent ?? { type: ev.name }) };
     for (const p of edge?.params ?? []) {
@@ -1656,33 +1669,13 @@ export function StateGraph({ spec, graph }: { spec: Working; graph: SpecModelGra
         eventPayload[p.name] = raw;
       }
     }
-    setStepping(true);
-    void postSim({ module: moduleName, state: sim.data.state, event: eventPayload, by: ev.sender }).then(
-      (data) => {
-        setStepping(false);
-        setSimEntry({
-          module: moduleName,
-          state: data.available ? { kind: "ready", data, stepCount: sim.stepCount + 1 } : { kind: "unavailable", reason: data.error },
-        });
-      },
-      () => setStepping(false),
-    );
+    runGraphSim({ module: moduleName, state: sim.data.state, event: eventPayload, by: ev.sender }, sim.stepCount + 1);
   };
 
   const handleReset = () => {
     if (!moduleName) return;
-    setStepping(true);
     setParamDrafts({});
-    void postSim({ module: moduleName }).then(
-      (data) => {
-        setStepping(false);
-        setSimEntry({
-          module: moduleName,
-          state: data.available ? { kind: "ready", data, stepCount: 0 } : { kind: "unavailable", reason: data.error },
-        });
-      },
-      () => setStepping(false),
-    );
+    runGraphSim({ module: moduleName }, 0);
   };
 
   const selectedEdgeObj = selectedEdgeId ? graph.edges.find((e) => e.id === selectedEdgeId) : undefined;

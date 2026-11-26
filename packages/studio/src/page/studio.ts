@@ -266,8 +266,25 @@ export function postSim(body: { module: string; state?: unknown; event?: unknown
   return api("sim", body) as Promise<SimResult>;
 }
 
-export function fetchPreview(): Promise<{ url: string | null; mode: "embedded" | "storybook" | "none" }> {
-  return api("preview") as Promise<{ url: string | null; mode: "embedded" | "storybook" | "none" }>;
+export interface PreviewHostInfo { url: string | null; mode: "embedded" | "storybook" | "none" }
+let previewCache: { project: string; promise: Promise<PreviewHostInfo>; value?: PreviewHostInfo } | undefined;
+
+export function cachedPreview(): PreviewHostInfo | undefined {
+  return previewCache && previewCache.project === S.project ? previewCache.value : undefined;
+}
+
+export function fetchPreview(): Promise<PreviewHostInfo> {
+  const project = S.project;
+  if (previewCache && previewCache.project === project) return previewCache.promise;
+  const entry: { project: string; promise: Promise<PreviewHostInfo>; value?: PreviewHostInfo } = {
+    project,
+    promise: (api("preview") as Promise<PreviewHostInfo>).then(
+      (res) => { entry.value = res; return res; },
+      (err) => { if (previewCache === entry) previewCache = undefined; throw err; },
+    ),
+  };
+  previewCache = entry;
+  return entry.promise;
 }
 
 export function postGraph(file: string, text: string): Promise<SpecModelGraph> {
@@ -306,7 +323,7 @@ export function start(route: string, body: unknown = {}) {
 }
 
 /** Follow what the server says of the project, loading it all again whenever the connection opens. */
-export function connect() {
+export function connect(): () => void {
   const events = new EventSource(`/api/events${query()}`);
   const load = async () => {
     const { projects, open } = await (await fetch("/api/projects")).json();
@@ -325,6 +342,7 @@ export function connect() {
     if (ended) refresh().catch((error: Error) => toast(error.message));
     else redraw();
   });
+  return () => events.close();
 }
 
 // --- what the checks say about each story and rule ----------------------------------------------------------------
@@ -365,8 +383,8 @@ export function reveal(file: string, key?: string) {
   setTimeout(() => document.querySelector(`[data-uid="${id}"]`)?.scrollIntoView({ block: "center" }), 0);
 }
 
-/** The stages of `pnpm check`, in the order it reports them (AGENTS.md, "Stages of `pnpm check`"). */
-const STAGES = ["model", "always", "sometimes", "replay", "types", "proof", "tests", "traces", "review"] as const;
+/** The stages of `pnpm check`, in the order it reports them (SPEC.md, "Stages of `pnpm check`"). */
+const STAGES = ["model", "always", "sometimes", "replay", "types", "proof", "tests", "traces", "explore", "review"] as const;
 export type StageMark = "passed" | "failed" | "skipped" | "running" | "";
 /**
  * Where each stage stands in a check, running or done: failed, passed, skipped (a skipped result names its stages

@@ -104,7 +104,7 @@ export function SplitView({
   };
 
   const handleAction = (prop: string, actionArgs: unknown[]) => {
-    setLastAction(dispatchPreviewAction(prop, actionArgs, sim, step));
+    setLastAction(dispatchPreviewAction(prop, actionArgs, sim, step, busy));
   };
 
   const bridgeLabel = activeModule

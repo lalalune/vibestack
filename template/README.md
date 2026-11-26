@@ -20,7 +20,7 @@ pnpm dev
 | `pnpm dev` | Runs the app and launches Vibestack Studio |
 | `pnpm studio` | Opens Vibestack Studio (or run `pnpm dlx vibestack-studio`) |
 | `pnpm cli <command>` | Runs project CLI subcommands (`pnpm cli --help` lists commands; pass `--json` for structured output) |
-| `pnpm check` | Runs the full verification pipeline: model, simulation, proofs, types, tests, traces, review |
+| `pnpm check` | Runs the full verification pipeline: model, simulation, proofs, types, tests, traces, explore, review |
 | `pnpm gen` | Generates TypeScript, Effect adapters, and React hooks from `spec/` |
 | `pnpm accept` | Records reviewed rules in `spec/lock.json` |
 | `pnpm new <name>` | Scaffolds a new spec area |

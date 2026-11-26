@@ -52,8 +52,6 @@ describe("the documents name what exists", () => {
       ".agents/.vibestack-manifest.json",
       "vibestack/README.md",
       "vibestack/LICENSE",
-      "selftest/docs.ts",
-      "selftest/examples.ts",
     ];
     // A heading as GitHub links to it.
     const anchors = (file: string) => read(file).split("\n").flatMap((line) => /^#{1,6} /.test(line) ? [line.replace(/^#+ /, "").toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").trim().replace(/\s/g, "-")] : []);
