@@ -68,6 +68,21 @@ function buildParseConfig(flags: FlagSpecs): ParseArgsOptionsConfig {
   return config;
 }
 
+function validateFlagSpecs(flags: FlagSpecs): void {
+  const shorts = new Set<string>(["h"]);
+  for (const [name, spec] of Object.entries(flags)) {
+    if (name === "help" || name === "json") {
+      throw new Error(`Flag "--${name}" is reserved by the CLI runner.`);
+    }
+    if (spec.short !== undefined) {
+      if (shorts.has(spec.short)) {
+        throw new Error(`Short flag "-${spec.short}" is duplicated or reserved.`);
+      }
+      shorts.add(spec.short);
+    }
+  }
+}
+
 function extractFlags<F extends FlagSpecs>(
   specs: F,
   values: Record<string, string | boolean | (string | boolean)[] | undefined>,
@@ -87,7 +102,11 @@ function extractFlags<F extends FlagSpecs>(
 export function defineCommand<const F extends FlagSpecs = Record<never, never>>(
   spec: CommandSpec<F>,
 ): RegisteredCommand {
+  if (spec.name === "help") {
+    throw new Error('Command name "help" is reserved.');
+  }
   const flags = (spec.flags ?? {}) as F;
+  validateFlagSpecs(flags);
   const parseConfig = buildParseConfig(flags);
   return {
     name: spec.name,
@@ -175,36 +194,25 @@ function commandManifest(command: RegisteredCommand) {
   };
 }
 
-function extractGlobalFlags(argv: readonly string[]): { readonly json: boolean; readonly help: boolean; readonly rest: readonly string[] } {
-  let json = false;
-  let help = false;
-  let passthrough = false;
-  const rest: string[] = [];
-  for (const token of argv) {
-    if (passthrough) {
-      rest.push(token);
-      continue;
-    }
-    if (token === "--") {
-      passthrough = true;
-      rest.push(token);
-      continue;
-    }
-    if (token === "--json") {
-      json = true;
-      continue;
-    }
-    if (token === "-h" || token === "--help") {
-      help = true;
-      continue;
-    }
-    rest.push(token);
-  }
-  return { json, help, rest };
-}
-
 function emitJson(io: CliIo, payload: unknown): void {
   io.writeOut(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+function emitHelp(
+  io: CliIo,
+  json: boolean,
+  commands: readonly RegisteredCommand[],
+  target?: RegisteredCommand,
+): void {
+  if (json) {
+    emitJson(io, {
+      ok: true,
+      command: "help",
+      data: target ? commandManifest(target) : { commands: commands.map(commandManifest) },
+    });
+    return;
+  }
+  io.writeOut(target ? formatCommandHelp(target) : formatGlobalHelp(commands));
 }
 
 function emitFailure(io: CliIo, json: boolean, command: string | undefined, message: string, data?: unknown): void {
@@ -220,28 +228,78 @@ function emitFailure(io: CliIo, json: boolean, command: string | undefined, mess
   io.writeErr(`error: ${message}\n`);
 }
 
-export async function runCli(options: RunCliOptions): Promise<number> {
-  const { json, help, rest } = extractGlobalFlags(options.argv);
-  const byName = new Map(options.commands.map((cmd) => [cmd.name, cmd]));
-  const [first, ...tail] = rest;
-
-  if (first === undefined || (help && first === "help")) {
-    if (json) {
-      emitJson(options.io, { ok: true, command: "help", data: { commands: options.commands.map(commandManifest) } });
-    } else {
-      options.io.writeOut(formatGlobalHelp(options.commands));
+function indexCommands(commands: readonly RegisteredCommand[]): ReadonlyMap<string, RegisteredCommand> {
+  const byName = new Map<string, RegisteredCommand>();
+  for (const cmd of commands) {
+    if (cmd.name === "help") {
+      throw new Error('Command name "help" is reserved.');
     }
+    if (byName.has(cmd.name)) {
+      throw new Error(`Duplicate CLI command "${cmd.name}".`);
+    }
+    byName.set(cmd.name, cmd);
+  }
+  return byName;
+}
+
+function extractLeadingGlobalFlags(argv: readonly string[]): {
+  readonly json: boolean;
+  readonly help: boolean;
+  readonly rest: readonly string[];
+} {
+  let json = false;
+  let help = false;
+  let index = 0;
+  while (index < argv.length) {
+    const token = argv[index];
+    if (token === "--json") {
+      json = true;
+      index += 1;
+      continue;
+    }
+    if (token === "-h" || token === "--help") {
+      help = true;
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return { json, help, rest: argv.slice(index) };
+}
+
+function detectCommandGlobalFlags(
+  flags: FlagSpecs,
+  argv: readonly string[],
+): { readonly json: boolean; readonly help: boolean; readonly positionals: readonly string[] } {
+  const parsed = parseArgs({
+    args: [...argv],
+    options: buildParseConfig(flags),
+    allowPositionals: true,
+    strict: false,
+  });
+  return {
+    json: parsed.values.json === true,
+    help: parsed.values.help === true,
+    positionals: parsed.positionals,
+  };
+}
+
+export async function runCli(options: RunCliOptions): Promise<number> {
+  const byName = indexCommands(options.commands);
+  const leading = extractLeadingGlobalFlags(options.argv);
+  const [first, ...tail] = leading.rest;
+
+  if (first === undefined) {
+    emitHelp(options.io, leading.json, options.commands);
     return 0;
   }
 
   if (first === "help") {
-    const targetName = tail[0];
-    if (targetName === undefined) {
-      if (json) {
-        emitJson(options.io, { ok: true, command: "help", data: { commands: options.commands.map(commandManifest) } });
-      } else {
-        options.io.writeOut(formatGlobalHelp(options.commands));
-      }
+    const helpArgs = detectCommandGlobalFlags({}, tail);
+    const json = leading.json || helpArgs.json;
+    const targetName = helpArgs.positionals[0];
+    if (leading.help || helpArgs.help || targetName === undefined) {
+      emitHelp(options.io, json, options.commands);
       return 0;
     }
     const target = byName.get(targetName);
@@ -249,26 +307,26 @@ export async function runCli(options: RunCliOptions): Promise<number> {
       emitFailure(options.io, json, "help", `Unknown command "${targetName}". Run "pnpm cli --help" to list commands.`);
       return 2;
     }
-    if (json) {
-      emitJson(options.io, { ok: true, command: "help", data: commandManifest(target) });
-    } else {
-      options.io.writeOut(formatCommandHelp(target));
-    }
+    emitHelp(options.io, json, options.commands, target);
     return 0;
   }
 
   const command = byName.get(first);
   if (!command) {
-    emitFailure(options.io, json, undefined, `Unknown command "${first}". Run "pnpm cli --help" to list commands.`);
+    const tailFlags = detectCommandGlobalFlags({}, tail);
+    emitFailure(
+      options.io,
+      leading.json || tailFlags.json,
+      undefined,
+      `Unknown command "${first}". Run "pnpm cli --help" to list commands.`,
+    );
     return 2;
   }
 
-  if (help) {
-    if (json) {
-      emitJson(options.io, { ok: true, command: "help", data: commandManifest(command) });
-    } else {
-      options.io.writeOut(formatCommandHelp(command));
-    }
+  const cmdFlags = detectCommandGlobalFlags(command.flags, tail);
+  const json = leading.json || cmdFlags.json;
+  if (leading.help || cmdFlags.help) {
+    emitHelp(options.io, json, options.commands, command);
     return 0;
   }
 

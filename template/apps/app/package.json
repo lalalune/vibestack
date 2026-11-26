@@ -13,14 +13,14 @@
   "dependencies": {
     "@repo/design-system": "workspace:*",
     "@repo/ui": "workspace:*",
-    "effect": "4.1.1",
+    "effect": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "vibelang-runtime": "0.0.13"
+    "vibelang-runtime": "catalog:"
   },
   "devDependencies": {
-    "@antithesishq/bombadil": "0.7.10",
-    "@effect/vitest": "4.1.1",
+    "@antithesishq/bombadil": "catalog:",
+    "@effect/vitest": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
@@ -31,8 +31,8 @@
     "playwright": "catalog:",
     "tailwindcss": "catalog:",
     "typescript": "catalog:",
-    "vibelang": "0.0.13",
-    "vibelang-vite": "0.0.13",
+    "vibelang": "catalog:",
+    "vibelang-vite": "catalog:",
     "vibestack": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"

@@ -26,7 +26,7 @@ export interface Source {
 }
 
 export function typescript({ header, typedefs, vals, funs, sig, typeOf, doc, local: L, source }: Source, roles: Roles, types: Types, print: Printer, helper: (which: string) => string): string {
-  const { tsType, declaration, validators, copy } = types;
+  const { tsType, declaration, parsers } = types;
   const { transitions, always, steps, laws, opaques, sender, output, refines } = roles;
   const state = roles.stateType && tsType(roles.stateType);
   // Where some transition has output, `step` returns it beside the state, and a transition without output outputs nothing.
@@ -104,17 +104,28 @@ export function typescript({ header, typedefs, vals, funs, sig, typeOf, doc, loc
   const admits = (t: Transition) => call(t.guard!, t.guardParams);
   const applies = (t: Transition) => call(t.name, t.params.map((p) => p.name));
   const when = (t: Transition) => `event.type === ${JSON.stringify(t.name)}`;
-  // A copy through JSON drops what JSON cannot hold; a value it cannot copy at all is not one the program accepts.
-  const cloned = [`  let raw: any;`, `  try {`, `    raw = JSON.parse(JSON.stringify(x));`, `  } catch {`, `    return undefined;`, `  }`];
-  const parsed = (t: Transition) => `{ ${[`type: ${JSON.stringify(t.name)}`, ...carried(t).map((p) => `${p.name}: ${copy(`raw.${p.name}`, p.type)}`)].join(", ")} }`;
-  // An event may carry more than its type names, which `parsed` drops; a state or a sender is exactly its type.
-  const carries = validators();
-  const events = transitions.map((t) => `  if (raw.type === ${JSON.stringify(t.name)}${carried(t).map((p) => ` && ${carries.test(`raw.${p.name}`, p.type)}`).join("")}) return ${parsed(t)};`);
+  // An event may carry more than its type names, which `parseEvent` drops; a state or a sender is exactly its type.
+  const carries = parsers();
+  const events = transitions.map((t) => {
+    const ps = carried(t);
+    if (!ps.length) return `    if (type === ${JSON.stringify(t.name)}) return { type: ${JSON.stringify(t.name)} };`;
+    const steps = ps.flatMap((p, i) => {
+      const keyLit = JSON.stringify(p.name);
+      return [
+        `const r${i} = Object.hasOwn(raw, ${keyLit}) ? raw[${keyLit}] : undefined;`,
+        `const p${i} = ${carries.parse(`r${i}`, p.type)};`,
+        `if (p${i} === undefined) return undefined;`,
+      ];
+    });
+    return `    if (type === ${JSON.stringify(t.name)}) { ${steps.join(" ")} return { ${[`type: ${JSON.stringify(t.name)}`, ...ps.map((p, i) => `${p.name}: p${i}`)].join(", ")} }; }`;
+  });
   const whole = (t: Json) => {
-    const exactly = validators(true);
-    const is = `  if (!(${exactly.test("raw", t)})) return undefined;`;
-    return [...exactly.lines(), is];
+    const exactly = parsers(true);
+    const expr = exactly.parse("x", t);
+    return { lines: exactly.lines().map((l) => `  ${l}`), expr };
   };
+  const stateParser = state ? whole(roles.stateType) : undefined;
+  const senderParser = sender ? whole(sender) : undefined;
   if (state) out.push(
     ``,
     `/** Do the rules allow this event${sender ? `, from this sender,` : ""} in this state? */`,
@@ -145,11 +156,16 @@ export function typescript({ header, typedefs, vals, funs, sig, typeOf, doc, loc
     ` */`,
     `//@ skip`,
     `export function ${L("parseEvent")}(x: unknown): ${L("Event")} | undefined {`,
-    ...cloned,
-    ...carries.lines(),
-    `  if (typeof raw !== "object" || raw === null) return undefined;`,
+    `  try {`,
+    `    if (typeof x !== "object" || x === null || Array.isArray(x)) return undefined;`,
+    `    const raw = x as Record<string, unknown>;`,
+    `    const type = Object.hasOwn(raw, "type") ? raw.type : undefined;`,
+    ...carries.lines().map((l) => `  ${l}`),
     ...events,
-    `  return undefined;`,
+    `    return undefined;`,
+    `  } catch {`,
+    `    return undefined;`,
+    `  }`,
     `}`,
     ``,
     `/**`,
@@ -160,10 +176,13 @@ export function typescript({ header, typedefs, vals, funs, sig, typeOf, doc, loc
     ` */`,
     `//@ skip`,
     `export function ${L("parseState")}(x: unknown): ${state} | undefined {`,
-    ...cloned,
-    ...whole(roles.stateType),
-    `  const parsed: ${state} = ${copy("raw", roles.stateType)};`,
-    `  return ${L("inv")}(parsed) ? parsed : undefined;`,
+    `  try {`,
+    ...stateParser!.lines,
+    `    const parsed: ${state} | undefined = ${stateParser!.expr};`,
+    `    return parsed !== undefined && ${L("inv")}(parsed) ? parsed : undefined;`,
+    `  } catch {`,
+    `    return undefined;`,
+    `  }`,
     `}`,
     ``,
     `/** Proof obligation: the initial state satisfies every \`always\` rule. */`,
@@ -178,9 +197,12 @@ export function typescript({ header, typedefs, vals, funs, sig, typeOf, doc, loc
     `/** Validate and copy the trusted sender supplied beside an event. */`,
     `//@ skip`,
     `export function ${L("parseSender")}(x: unknown): ${tsType(sender)} | undefined {`,
-    ...cloned,
-    ...whole(sender),
-    `  return ${copy("raw", sender)};`,
+    `  try {`,
+    ...senderParser!.lines,
+    `    return ${senderParser!.expr};`,
+    `  } catch {`,
+    `    return undefined;`,
+    `  }`,
     `}`,
   );
   // The helpers come last: which are needed is known only once every definition has been printed.

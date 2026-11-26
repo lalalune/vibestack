@@ -43,6 +43,7 @@ const EXCLUDED_ENTRIES = new Set([
   ".studio",
   ".lemmascript",
   "_apalache-out",
+  "__traces__",
 ]);
 
 const USAGE = [
@@ -249,7 +250,7 @@ async function downloadExampleFromGitHub(name: ExampleName, version: string, tar
   ];
   let response: Response | undefined;
   for (const url of urls) {
-    const attempt = await fetch(url, { redirect: "follow" });
+    const attempt = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
     if (attempt.ok) {
       response = attempt;
       break;
@@ -350,7 +351,7 @@ function applyProjectCustomizations(
   if (fs.existsSync(workspacePath)) {
     const current = fs.readFileSync(workspacePath, "utf8");
     const updated = useCatalog
-      ? current.replace(/^(\s*vibestack:\s*).+$/m, `$1${formatYamlScalar(vibestackVersion)}`)
+      ? current.replace(/^(\s*vibestack:\s*).+$/m, (_match, prefix: string) => `${prefix}${formatYamlScalar(vibestackVersion)}`)
       : current.replace(/^\s*vibestack:.*\r?\n/m, "");
     fs.writeFileSync(workspacePath, updated);
   }

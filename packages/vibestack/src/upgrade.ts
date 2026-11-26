@@ -14,7 +14,7 @@ const MIN_NODE = 26;
 
 const VIBELANG_DEPS = ["effect", "@effect/platform-node", "vibelang-runtime"] as const;
 const VIBELANG_DEV_DEPS = ["vibelang", "vibelang-vite", "vite", "vitest", "@effect/vitest", "@types/node", "@antithesishq/bombadil"] as const;
-const ALIGNED_PINS = ["effect", "@effect/platform-node", "@effect/vitest", "vibelang", "vibelang-runtime", "vibelang-vite", "vite", "vitest"] as const;
+const ALIGNED_PINS = ["effect", "@effect/platform-node", "@effect/vitest", "@antithesishq/bombadil", "vibelang", "vibelang-runtime", "vibelang-vite", "vite", "vitest"] as const;
 
 const GITIGNORE_ENTRIES = [
   "gen/",
@@ -344,10 +344,20 @@ function resolveLocalPackage(root: string, fromPath: string): { spec: string; di
   return { spec: `file:${rel.startsWith(".") ? rel : `./${rel}`}`, dir: pkgDir };
 }
 
-function replaceYamlPin(content: string, section: "catalog" | "overrides", pkg: string, nextValue: string): { text: string; changed: boolean } {
-  const lines = content.split("\n");
+function isCatalogAllowedVersion(spec: string): boolean {
+  return !/^(?:file:|link:|workspace:|https?:|git\+|git:|github:)/i.test(spec);
+}
+
+function formatYamlScalar(value: string): string {
+  return /[:\s#"'{}[\],&*?|>!%@`]/.test(value) ? JSON.stringify(value) : value;
+}
+
+function replaceYamlPin(content: string, section: "catalog" | "overrides", pkg: string, nextValue: string | undefined): { text: string; changed: boolean; found: boolean } {
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
+  const lines = content.split(/\r?\n/);
   let inSection = false;
   let changed = false;
+  let found = false;
   const escaped = pkg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const keyPattern = new RegExp(`^(\\s+)(["']?${escaped}["']?):\\s*(.+?)\\s*$`);
   for (let i = 0; i < lines.length; i++) {
@@ -359,43 +369,94 @@ function replaceYamlPin(content: string, section: "catalog" | "overrides", pkg: 
     if (!inSection || !line.startsWith(" ")) continue;
     const match = keyPattern.exec(line);
     if (!match) continue;
-    if (match[3].replace(/^["']|["']$/g, "") !== nextValue) {
-      lines[i] = `${match[1]}${match[2]}: ${nextValue}`;
+    found = true;
+    if (nextValue === undefined) {
+      lines.splice(i, 1);
       changed = true;
+    } else {
+      const current = match[3].replace(/\s+#.*$/, "").replace(/^["']|["']$/g, "");
+      if (current !== nextValue) {
+        lines[i] = `${match[1]}${match[2]}: ${formatYamlScalar(nextValue)}`;
+        changed = true;
+      }
     }
     break;
   }
-  return { text: lines.join("\n"), changed };
+  return { text: lines.join(eol), changed, found };
+}
+
+function rewriteMemberVibestackSpecs(root: string, targetSpec: string, dryRun: boolean, bumped: string[]) {
+  for (const container of ["apps", "packages"]) {
+    const containerDir = path.join(root, container);
+    if (!fs.existsSync(containerDir)) continue;
+    for (const entry of fs.readdirSync(containerDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!entry.isDirectory()) continue;
+      const pkgFile = path.join(containerDir, entry.name, "package.json");
+      if (!fs.existsSync(pkgFile)) continue;
+      const json = JSON.parse(fs.readFileSync(pkgFile, "utf8")) as Record<string, Record<string, string> | undefined>;
+      let changed = false;
+      for (const field of ["devDependencies", "dependencies"] as const) {
+        if (json[field] && "vibestack" in json[field] && json[field].vibestack !== targetSpec) {
+          json[field].vibestack = targetSpec;
+          changed = true;
+          bumped.push(`${container}/${entry.name}/package.json ${field}.vibestack -> ${targetSpec}`);
+        }
+      }
+      if (changed && !dryRun) writeWhole(pkgFile, JSON.stringify(json, null, 2) + "\n");
+    }
+  }
 }
 
 function bumpVibestackSpec(root: string, targetSpec: string, dryRun: boolean): string[] {
   const bumped: string[] = [];
+  const allowCatalog = isCatalogAllowedVersion(targetSpec);
   const wsFile = path.join(root, "pnpm-workspace.yaml");
   if (fs.existsSync(wsFile)) {
     const raw = fs.readFileSync(wsFile, "utf8");
-    const updated = replaceYamlPin(raw, "catalog", "vibestack", targetSpec);
-    if (updated.changed) {
-      if (!dryRun) writeWhole(wsFile, updated.text);
-      bumped.push(`pnpm-workspace.yaml catalog.vibestack -> ${targetSpec}`);
-      return bumped;
+    if (allowCatalog) {
+      const updated = replaceYamlPin(raw, "catalog", "vibestack", targetSpec);
+      if (updated.found) {
+        if (updated.changed) {
+          if (!dryRun) writeWhole(wsFile, updated.text);
+          bumped.push(`pnpm-workspace.yaml catalog.vibestack -> ${targetSpec}`);
+        }
+        return bumped;
+      }
+    } else {
+      const removed = replaceYamlPin(raw, "catalog", "vibestack", undefined);
+      if (removed.changed) {
+        if (!dryRun) writeWhole(wsFile, removed.text);
+        bumped.push("pnpm-workspace.yaml catalog.vibestack removed");
+      }
     }
   }
   const pkgFile = path.join(root, "package.json");
   if (fs.existsSync(pkgFile)) {
     const json = JSON.parse(fs.readFileSync(pkgFile, "utf8")) as Record<string, Record<string, string> | undefined>;
+    let updatedRoot = false;
     for (const field of ["devDependencies", "dependencies"] as const) {
-      if (json[field] && "vibestack" in json[field] && json[field].vibestack !== "catalog:") {
-        if (json[field].vibestack !== targetSpec) {
-          json[field].vibestack = targetSpec;
-          if (!dryRun) writeWhole(pkgFile, JSON.stringify(json, null, 2) + "\n");
-          bumped.push(`package.json ${field}.vibestack -> ${targetSpec}`);
+      if (json[field] && "vibestack" in json[field]) {
+        if (!allowCatalog || json[field].vibestack !== "catalog:") {
+          if (json[field].vibestack !== targetSpec) {
+            json[field].vibestack = targetSpec;
+            if (!dryRun) writeWhole(pkgFile, JSON.stringify(json, null, 2) + "\n");
+            bumped.push(`package.json ${field}.vibestack -> ${targetSpec}`);
+          }
+          updatedRoot = true;
+          break;
         }
-        return bumped;
+        updatedRoot = true;
+        break;
       }
     }
-    json.devDependencies = { ...(json.devDependencies ?? {}), vibestack: targetSpec };
-    if (!dryRun) writeWhole(pkgFile, JSON.stringify(json, null, 2) + "\n");
-    bumped.push(`package.json devDependencies.vibestack -> ${targetSpec}`);
+    if (!updatedRoot) {
+      json.devDependencies = { ...(json.devDependencies ?? {}), vibestack: targetSpec };
+      if (!dryRun) writeWhole(pkgFile, JSON.stringify(json, null, 2) + "\n");
+      bumped.push(`package.json devDependencies.vibestack -> ${targetSpec}`);
+    }
+  }
+  if (!allowCatalog && fs.existsSync(wsFile)) {
+    rewriteMemberVibestackSpecs(root, targetSpec, dryRun, bumped);
   }
   return bumped;
 }
@@ -449,7 +510,7 @@ function alignToolchainPins(root: string, assets: PackageAssets, dryRun: boolean
 function pruneEmptyDirs(root: string, startDir: string) {
   let dir = startDir;
   const stop = path.join(root, ".agents");
-  while (dir.startsWith(stop) && dir !== stop) {
+  while (dir.startsWith(stop + path.sep)) {
     try {
       if (fs.readdirSync(dir).length > 0) break;
       fs.rmdirSync(dir);

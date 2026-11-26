@@ -175,6 +175,67 @@ describe("project CLI", () => {
       io: recorded.io,
     })).toBe(0);
     expect(recorded.out()).toBe("ok:HELLO WORLD\n");
+
+    const flagValue = createRecorder();
+    expect(await runCli({
+      argv: ["echo", "--prefix=--help", "hi"],
+      commands: [custom],
+      rootDir: templateRoot,
+      cwd: templateRoot,
+      io: flagValue.io,
+    })).toBe(0);
+    expect(flagValue.out()).toBe("--help:hi\n");
+
+    const ambiguousFlagValue = createRecorder();
+    expect(await runCli({
+      argv: ["echo", "--prefix", "--help", "hi"],
+      commands: [custom],
+      rootDir: templateRoot,
+      cwd: templateRoot,
+      io: ambiguousFlagValue.io,
+    })).toBe(2);
+    expect(ambiguousFlagValue.out()).toBe("");
+
+    const bundledHelp = createRecorder();
+    expect(await runCli({
+      argv: ["echo", "-uh"],
+      commands: [custom],
+      rootDir: templateRoot,
+      cwd: templateRoot,
+      io: bundledHelp.io,
+    })).toBe(0);
+    expect(bundledHelp.out()).toContain("Usage: pnpm cli echo [options]");
+
+    const passthrough = createRecorder();
+    expect(await runCli({
+      argv: ["echo", "--", "--help"],
+      commands: [custom],
+      rootDir: templateRoot,
+      cwd: templateRoot,
+      io: passthrough.io,
+    })).toBe(0);
+    expect(passthrough.out()).toBe("--help\n");
+
+    expect(() => defineCommand({ name: "help", summary: "Reserved", run: () => ({ ok: true, data: null }) })).toThrow();
+    expect(() => defineCommand({
+      name: "bad",
+      summary: "Reserved flag",
+      flags: { json: { kind: "boolean", description: "Reserved" } },
+      run: () => ({ ok: true, data: null }),
+    })).toThrow();
+    expect(() => defineCommand({
+      name: "bad-short",
+      summary: "Reserved short",
+      flags: { header: { kind: "string", short: "h", description: "Reserved" } },
+      run: () => ({ ok: true, data: null }),
+    })).toThrow();
+    await expect(runCli({
+      argv: ["echo"],
+      commands: [custom, custom],
+      rootDir: templateRoot,
+      cwd: templateRoot,
+      io: createRecorder().io,
+    })).rejects.toThrow(/Duplicate CLI command/);
   });
 
   test("executes directly on Node 26 via src/main.ts", () => {

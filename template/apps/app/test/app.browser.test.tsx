@@ -12,7 +12,7 @@ import { App } from "../src/App.tsx";
 import { greeter } from "../src/greeter.vibe";
 import { linkTo } from "../src/link.ts";
 
-const opened: { root: Root; runtime: ManagedRuntime.ManagedRuntime<Machine, unknown> }[] = [];
+const opened: { container: HTMLDivElement; root: Root; runtime: ManagedRuntime.ManagedRuntime<Machine, unknown> }[] = [];
 function SharedGreeting({ runtime }: Pick<(typeof opened)[number], "runtime">) {
   const { state } = useMachine(runtime);
   if (!state) throw new Error("A child lost the machine snapshot its parent already read");
@@ -27,17 +27,26 @@ function OpenedApp({ runtime, search }: Pick<(typeof opened)[number], "runtime">
 const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 const previousActEnvironment = environment.IS_REACT_ACT_ENVIRONMENT;
 
+async function closeOpened() {
+  for (const { container, root, runtime } of opened.splice(0)) {
+    await act(() => Promise.resolve(root.unmount()));
+    container.remove();
+    await runtime.dispose();
+  }
+}
+
 /** The page opened at `search`, over the browser's own localStorage, as main.tsx opens it. */
 async function open(search = "") {
-  for (const { root } of opened) await act(() => Promise.resolve(root.unmount()));
+  await closeOpened();
   const runtime = ManagedRuntime.make(Layer.provide(greeter, KeyValueStore.layerStorage(() => localStorage)));
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
-  opened.push({ root, runtime });
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  opened.push({ container, root, runtime });
   await act(() => Promise.resolve(root.render(<OpenedApp runtime={runtime} search={search} />)));
 }
 
 async function cleanup() {
-  for (const { root, runtime } of opened.splice(0)) { await act(() => Promise.resolve(root.unmount())); await runtime.dispose(); }
+  await closeOpened();
   localStorage.clear();
 }
 

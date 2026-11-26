@@ -30,6 +30,136 @@ export const bigNumberInteger = (v: any): bigint | undefined => {
   return shift < 0n ? undefined : BigInt(sign) * BigInt(coefficient) * 10n ** shift;
 };
 
+interface ParserContext {
+  fields: (t: Json) => Json[];
+  typedef: (n: string) => Json;
+  resolve: (t: Json) => Json;
+  payload: (variant: Json) => Json | undefined;
+  tagged: (t: Json) => boolean;
+  keyOf: (t: Json) => Json;
+  typeName: (d: Json) => string;
+  tsType: (t: Json) => string;
+}
+
+function buildParsers(ctx: ParserContext, exact = false) {
+  const { fields, typedef, resolve, payload, tagged, keyOf, typeName, tsType } = ctx;
+  const made = new Map<string, string>();
+  const bodyOf = (v: string, t0: Json, depth: number): string | undefined => {
+    const t = resolve(t0);
+    const o = `o${depth}`;
+    const r = `r${depth}`;
+    const i = `i${depth}`;
+    const k = `k${depth}`;
+    const item = `item${depth}`;
+    const res = `out${depth}`;
+    const seen = `seen${depth}`;
+    const recFields = (rec: Json, prefix: string) => fields(rec).flatMap((f, idx) => {
+      const rawVar = `${prefix}r${idx}`;
+      const valVar = `${prefix}v${idx}`;
+      const keyLit = JSON.stringify(f.fieldName);
+      return [
+        `const ${rawVar} = Object.hasOwn(${o}, ${keyLit}) ? ${o}[${keyLit}] : undefined;`,
+        `const ${valVar} = ${parse(rawVar, f.fieldType, depth + 1)};`,
+        `if (${valVar} === undefined) return undefined;`,
+      ];
+    });
+    const recLit = (rec: Json, prefix: string) => fields(rec).map((f, idx) => `${f.fieldName}: ${prefix}v${idx}`).join(", ");
+    if (t.kind === "rec") {
+      const fs = fields(t);
+      return [
+        `if (typeof ${v} !== "object" || ${v} === null || Array.isArray(${v})) return undefined;`,
+        `const ${o} = ${v} as Record<string, unknown>;`,
+        ...(exact ? [`if (Object.keys(${o}).length !== ${fs.length}) return undefined;`] : []),
+        ...recFields(t, `f${depth}_`),
+        `return { ${recLit(t, `f${depth}_`)} };`,
+      ].join(" ");
+    }
+    if (tagged(t)) {
+      const tag = `tag${depth}`;
+      const arms = fields(t).map((f, armIdx) => {
+        const carried = payload(f);
+        const count = 1 + (carried ? fields(carried).length : 0);
+        const prefix = `a${depth}_${armIdx}_`;
+        const armBody = [
+          ...(exact ? [`if (Object.keys(${o}).length !== ${count}) return undefined;`] : []),
+          ...(carried ? recFields(carried, prefix) : []),
+          `return { ${[`tag: ${JSON.stringify(f.fieldName)}`, ...(carried ? [recLit(carried, prefix)] : [])].join(", ")} };`,
+        ];
+        return `if (${tag} === ${JSON.stringify(f.fieldName)}) { ${armBody.join(" ")} }`;
+      });
+      return [
+        `if (typeof ${v} !== "object" || ${v} === null || Array.isArray(${v})) return undefined;`,
+        `const ${o} = ${v} as Record<string, unknown>;`,
+        `const ${tag} = Object.hasOwn(${o}, "tag") ? ${o}.tag : undefined;`,
+        ...arms,
+        `return undefined;`,
+      ].join(" ");
+    }
+    if (t.kind === "list" || t.kind === "set") {
+      const elemType = tsType(t.elem);
+      return [
+        `if (!Array.isArray(${v})) return undefined;`,
+        `const ${res}: ${elemType}[] = new Array(${v}.length);`,
+        ...(t.kind === "set" ? [`const ${seen} = new Set<${elemType}>();`] : []),
+        `for (let ${i} = 0; ${i} < ${v}.length; ${i}++) {`,
+        `if (!(${i} in ${v})) return undefined;`,
+        `const ${r} = ${v}[${i}];`,
+        `const ${item} = ${parse(r, t.elem, depth + 1)};`,
+        `if (${item} === undefined) return undefined;`,
+        ...(t.kind === "set" ? [`if (${seen}.has(${item})) return undefined; ${seen}.add(${item});`] : []),
+        `${res}[${i}] = ${item};`,
+        `}`,
+        `return ${res};`,
+      ].join(" ");
+    }
+    if (t.kind === "fun") {
+      if (!exact) return fail("an event cannot carry a map; send a list of records instead");
+      const keyType = keyOf(t);
+      const resType = tsType(t.res);
+      const mapType = tsType(t0);
+      const keyOk = keyType.kind === "str" ? `${k}.startsWith("$")`
+        : keyType.kind === "int" ? `/^(0|-?[1-9][0-9]*)$/.test(${k}) && Number.isSafeInteger(Number(${k}))`
+        : `(${fields(keyType).map((f) => `${k} === ${JSON.stringify(f.fieldName)}`).join(" || ")})`;
+      return [
+        `if (typeof ${v} !== "object" || ${v} === null || Array.isArray(${v})) return undefined;`,
+        `const ${o} = ${v} as Record<string, unknown>;`,
+        `const ${res}: Record<string, ${resType}> = {};`,
+        `for (const ${k} of Object.keys(${o})) {`,
+        `if (!(${keyOk})) return undefined;`,
+        `const ${r} = ${o}[${k}];`,
+        `const ${item} = ${parse(r, t.res, depth + 1)};`,
+        `if (${item} === undefined) return undefined;`,
+        `${res}[${k}] = ${item};`,
+        `}`,
+        `return ${res} as ${mapType};`,
+      ].join(" ");
+    }
+    return undefined;
+  };
+  const parse = (v: string, t0: Json, depth = 0, own = false): string => {
+    const t = resolve(t0);
+    if (t.kind === "int") return `typeof ${v} === "number" && Number.isSafeInteger(${v}) ? ${v} + 0 : undefined`;
+    if (t.kind === "bool") return `typeof ${v} === "boolean" ? ${v} : undefined`;
+    if (t.kind === "str") return `typeof ${v} === "string" ? ${v} : undefined`;
+    if (t.kind === "sum" && !tagged(t)) return `(${fields(t).map((f) => `${v} === ${JSON.stringify(f.fieldName)}`).join(" || ")}) ? ${v} : undefined`;
+    if (t0.kind === "const" && !own) {
+      const fn = `parse_${typeName(typedef(t0.name))}`;
+      if (!made.has(fn)) {
+        const block = bodyOf("v", t0, 0);
+        made.set(fn, block !== undefined
+          ? `  const ${fn} = (v: unknown): ${tsType(t0)} | undefined => { ${block} };`
+          : `  const ${fn} = (v: unknown): ${tsType(t0)} | undefined => ${parse("v", t0, 0, true)};`);
+      }
+      return `${fn}(${v})`;
+    }
+    const p = `v${depth}`;
+    const block = bodyOf(p, t0, depth);
+    if (block !== undefined) return `((${p}: unknown): ${tsType(t0)} | undefined => { ${block} })(${v})`;
+    return fail(`a parameter of type ${t.kind} is not supported`);
+  };
+  return { parse, lines: () => [...made.values()] };
+}
+
 export function typeWalks(typedefs: Json[], module: string, prefix = "") {
   const fields = (t: Json): Json[] => t.kind === "rec" && t.fields.fields.some((f: Json) => f.fieldName === "__proto__")
     ? fail("a record field cannot be called `__proto__`, which JavaScript reads as the object's prototype") : t.fields.fields;
@@ -151,60 +281,8 @@ export function typeWalks(typedefs: Json[], module: string, prefix = "") {
   };
 
   // --- untrusted values --------------------------------------------------------
-  /**
-   * Runtime tests that an untrusted value inhabits a type: `test` is the expression for one value, and `lines` declare
-   * the function it calls for each named record or variant type, so that a type is tested by one text however many
-   * places hold it. `exact` is for a whole state: a record or variant may have no field beyond those its type names,
-   * and a map is allowed, as a record whose keys are stored as the generated code stores them (keyOf).
-   */
-  const validators = (exact = false) => {
-    const made = new Map<string, string>();
-    const test = (v: string, t0: Json, depth = 0, own = false): string => {
-      const t = resolve(t0);
-      if (t.kind === "int") return `Number.isSafeInteger(${v})`;
-      if (t.kind === "bool") return `typeof ${v} === "boolean"`;
-      if (t.kind === "str") return `typeof ${v} === "string"`;
-      if (t.kind === "sum" && !tagged(t)) return `(${fields(t).map((f) => `${v} === ${JSON.stringify(f.fieldName)}`).join(" || ")})`;
-      if (t0.kind === "const" && !own) {
-        const fn = `is_${typeName(typedef(t0.name))}`;
-        if (!made.has(fn)) made.set(fn, `  const ${fn} = (v: any): boolean => ${test("v", t0, 0, true)};`);
-        return `${fn}(${v})`;
-      }
-      const x = `x${depth}`;
-      const object = `typeof ${v} === "object" && ${v} !== null && !Array.isArray(${v})`;
-      const sized = (n: number) => (exact ? [`Object.keys(${v}).length === ${n}`] : []);
-      const record = (r: Json) => fields(r).map((f) => test(`${v}.${f.fieldName}`, f.fieldType, depth + 1));
-      if (tagged(t)) return `${object} && (${fields(t).map((f) => [`${v}.tag === ${JSON.stringify(f.fieldName)}`, ...(payload(f) ? record(payload(f)!) : []), ...sized(1 + (payload(f) ? fields(payload(f)!).length : 0))].join(" && ")).join(" || ")})`;
-      if (t.kind === "list" || t.kind === "set")
-        return `Array.isArray(${v}) && ${v}.every((${x}: any) => ${test(x, t.elem, depth + 1)})${t.kind === "set" ? ` && new Set(${v}).size === ${v}.length` : ""}`;
-      if (t.kind === "rec") return [object, ...record(t), ...sized(fields(t).length)].join(" && ");
-      if (t.kind === "fun") {
-        if (!exact) return fail("an event cannot carry a map; send a list of records instead");
-        const [k, key] = [keyOf(t), `k${depth}`];
-        const stored = k.kind === "str" ? `${key}.startsWith("$")`
-          : k.kind === "int" ? `/^(0|-?[1-9][0-9]*)$/.test(${key}) && Number.isSafeInteger(Number(${key}))`
-          : `(${fields(k).map((f) => `${key} === ${JSON.stringify(f.fieldName)}`).join(" || ")})`;
-        return `${object} && Object.entries(${v}).every(([${key}, ${x}]: [string, any]) => ${stored} && ${test(x, t.res, depth + 1)})`;
-      }
-      return fail(`a parameter of type ${t.kind} is not supported`);
-    };
-    return { test, lines: () => [...made.values()] };
-  };
-  /** A copy of a checked value that has the fields its type names and no others. */
-  const copy = (v: string, t0: Json, depth = 0): string => {
-    const t = resolve(t0);
-    const x = `x${depth}`;
-    const record = (r: Json) => fields(r).map((f) => `${f.fieldName}: ${copy(`${v}.${f.fieldName}`, f.fieldType, depth + 1)}`);
-    const variant = (f: Json) => `{ ${[`tag: ${v}.tag`, ...(payload(f) ? record(payload(f)!) : [])].join(", ")} }`;
-    if (tagged(t)) return `(${fields(t).slice(0, -1).map((f) => `${v}.tag === ${JSON.stringify(f.fieldName)} ? ${variant(f)} : `).join("")}${variant(fields(t).at(-1)!)})`;
-    if (t.kind === "list" || t.kind === "set") return `${v}.map((${x}: any) => ${copy(x, t.elem, depth + 1)})`;
-    if (t.kind === "rec") return `({ ${record(t).join(", ")} })`;
-    if (t.kind === "fun") {
-      const entries = `Object.fromEntries(Object.entries(${v}).map(([k${depth}, ${x}]: [string, any]) => [k${depth}, ${copy(x, t.res, depth + 1)}]))`;
-      return keyOf(t).kind === "sum" ? `(${entries} as ${tsType(t)})` : entries;
-    }
-    return v;
-  };
+  /** Single-read validate-and-copy parsers for untrusted inputs (defeating TOCTOU getters without JSON round-trips). */
+  const parsers = (exact = false) => buildParsers({ fields, typedef, resolve, payload, tagged, keyOf, typeName, tsType }, exact);
 
   // --- values in a simulated trace -----------------------------------------------
   /** A value from a Quint trace (ITF) as the generated TypeScript represents it. */
@@ -253,6 +331,6 @@ export function typeWalks(typedefs: Json[], module: string, prefix = "") {
     return fail(`a comparison of type ${t.kind} is not supported`);
   };
 
-  return { fields, typedef, resolve, shape, payload, tagged, isScalar, setElem, keyOf, storedKey, holdsSet, named, ownerOf, typeName, tsType, declaration, qType, validators, copy, decode, canon, comparison };
+  return { fields, typedef, resolve, shape, payload, tagged, isScalar, setElem, keyOf, storedKey, holdsSet, named, ownerOf, typeName, tsType, declaration, qType, parsers, decode, canon, comparison };
 }
 export type Types = ReturnType<typeof typeWalks>;
