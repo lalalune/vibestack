@@ -1,29 +1,25 @@
-// Properties of an Effect Schema, and of a function under a declared contract, checked by Effect's own Arbitrary
-// runner. generate.ts writes a test for each from `src/**/*.schema.{ts,vibe}` and `src/**/*.contract.{ts,vibe}`.
 import { expect, it } from "@effect/vitest";
-import { Arbitrary, Effect, Equal, Schema } from "effect";
+import { Arbitrary, Cause, Effect, Equal, Schema } from "effect";
 import { Base64 } from "effect/encoding";
 import { profile, type TestProfile } from "./profile.ts";
 
-// Vite supplies MODE in a test worker; the generator also imports this module directly in Node.
 const mode: TestProfile = (import.meta as ImportMeta & { env?: { MODE?: string } }).env?.MODE === "nightly" ? "nightly" : "normal";
 
-/** The fixed profile selected by `vitest run`, or by `vitest run --mode nightly`. */
 export const fuzz = profile(mode);
 
-/** Where a property's values come from. */
 export type Source<A> = Schema.Schema<A> | Arbitrary.Arbitrary<A>;
 
-/**
- * Check `property` on `fuzz.runs` values of `source`, in an `it.effect`; `options` replace what they name of `fuzz`.
- * A failure carries the shrunk counterexample, the seed and the command that repeats it.
- */
 export const holds = <A>(source: Source<A>, property: (value: A) => boolean, options?: Arbitrary.CheckOptions) => {
   const used = { ...fuzz, ...options };
   return Arbitrary.checkEffect(
     Arbitrary.isArbitrary(source) ? source : Arbitrary.schema(source),
-    // A property that throws is falsified by its cause, as in @effect/vitest's it.prop.
-    (value) => Effect.catchCause(Effect.sync(() => property(value)), (cause) => Effect.fail(cause)),
+    (value) => {
+      try {
+        return Effect.succeed(property(value));
+      } catch (error) {
+        return Effect.fail(Cause.die(error));
+      }
+    },
     used,
   ).pipe(Effect.flatMap((result) => {
     const failure = Arbitrary.formatCheckFailure(result);
@@ -87,6 +83,7 @@ export function contractTest<A, B>(name: string, c: Contract<A, B>, property: st
 }
 
 export function schemaTests<A, I>(name: string, schema: Schema.Codec<A, I>) {
-  it.effect(`${name}: decoding what was encoded gives the value back`, () => holds(schema, roundTrips(schema)));
-  it.effect(`${name}: encoding is stable`, () => holds(schema, encodesStably(schema)));
+  const arbitrary = Arbitrary.schema(schema);
+  it.effect(`${name}: decoding what was encoded gives the value back`, () => holds(arbitrary, roundTrips(schema)));
+  it.effect(`${name}: encoding is stable`, () => holds(arbitrary, encodesStably(schema)));
 }

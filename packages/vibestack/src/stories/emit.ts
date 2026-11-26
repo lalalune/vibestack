@@ -1,10 +1,6 @@
-// Writes what the analysis found: a CSF file per component, the catalog Studio reads (`ComponentIndex`), and two
-// Vitest files that run every story: one for a simulated DOM and one for a real browser.
-// A component whose inputs hash as they did last time is not analyzed or written again.
 import { createHash } from "node:crypto";
-import { type FSWatcher, type Stats, existsSync, readFileSync, readdirSync, rmSync, statSync, unwatchFile, watch, watchFile } from "node:fs";
+import { type FSWatcher, type Stats, existsSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unwatchFile, watch, watchFile } from "node:fs";
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from "node:path";
-import ts from "typescript";
 import { writeWhole } from "../run.ts";
 import { type Found, type Lookup, type Prop, analyze, beside, compare, isComponentSource, modelFile, modelTag, packageOf, programs, sources } from "./analyze.ts";
 import { type Plan, type Story, plan } from "./variants.ts";
@@ -271,6 +267,7 @@ const browser = (files: string[], preview: string | undefined) =>
 
 /** A generator for one project. Each call brings the output up to date and says what it changed. */
 export function generator({ root, out = outOf(root), cap = 12 }: Options): (observe?: (file: string) => void) => Result {
+  root = resolve(root);
   out = resolve(root, out);
   let configured = new Map<string, string | undefined>();
   let configLookups: Lookup[] = [];
@@ -279,8 +276,13 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
   let built: ReturnType<ReturnType<typeof programs>> | undefined;
   const rel = (file: string) => relative(root, file).replaceAll("\\", "/");
   const from = (file: string) => JSON.stringify(relative(out, file).replaceAll("\\", "/").replace(/^(?!\.)/, "./"));
-  // A file the Program read is hashed as the Program read it, so an edit made while it ran is seen by the next run.
-  const text = (file: string) => built?.program.getSourceFile(file)?.text ?? (built && configured.has(file) ? configured.get(file) : existsSync(file) ? ts.sys.readFile(file) : undefined);
+  const safeRealpath = (file: string) => {
+    try { return realpathSync(file); } catch { return file; }
+  };
+  const readDisk = (file: string) => {
+    try { return readFileSync(file, "utf8"); } catch { return undefined; }
+  };
+  const text = (file: string) => built?.program.getSourceFile(file)?.text ?? (built && configured.has(file) ? configured.get(file) : readDisk(file));
   const hash = (component: string, inputs: string[], observe?: (file: string) => void, read = text) => {
     const sum = createHash("sha1").update(`${VERSION}:${cap}:${rel(out)}`);
     for (const file of inputs) {
@@ -318,7 +320,15 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
     built = undefined;
     const manifest = join(out, MANIFEST);
     const saved = existsSync(manifest) ? readFileSync(manifest, "utf8") : undefined;
-    const known: Record<string, Entry> = saved === undefined ? {} : JSON.parse(saved);
+    let known: Record<string, Entry> = {};
+    if (saved !== undefined) {
+      try {
+        const parsed = JSON.parse(saved) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) known = parsed as Record<string, Entry>;
+      } catch {
+        known = {};
+      }
+    }
     const written: string[] = [];
     const write = (name: string, text: string) => {
       if (existsSync(join(out, name)) && readFileSync(join(out, name), "utf8") === text) return;
@@ -339,9 +349,9 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
         const absolute = join(root, file);
         observe?.(absolute);
         switch (kind) {
-          case "file": states.set(key, ts.sys.fileExists(absolute)); break;
-          case "directory": states.set(key, ts.sys.directoryExists(absolute)); break;
-          case "realpath": states.set(key, rel(ts.sys.realpath!(absolute))); break;
+          case "file": states.set(key, statSync(absolute, { throwIfNoEntry: false })?.isFile() === true); break;
+          case "directory": states.set(key, statSync(absolute, { throwIfNoEntry: false })?.isDirectory() === true); break;
+          case "realpath": states.set(key, rel(safeRealpath(absolute))); break;
           case "manifest": {
             const content = read(absolute);
             states.set(key, content === undefined ? undefined : createHash("sha1").update(content).digest("hex"));
@@ -351,12 +361,6 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
       }
       return states.get(key) === (before ?? false);
     };
-    if (!build || !configLookups.every(valid) || [...configured].some(([file, before]) => before !== read(file))) {
-      const configs = new Map<string, string | undefined>();
-      configLookups = [];
-      build = programs(root, configs, configLookups);
-      configured = configs;
-    }
     let reset = false;
     const fresh = (file: string, entry: Entry | undefined) => {
       if (!entry?.lookups || !entry.lookups.every(valid)) {
@@ -366,10 +370,19 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
       return entry.hash === hash(file, entry.inputs, observe, read) && entry.outputs.every((name) => existsSync(join(out, name)));
     };
     const stale = files.filter((file) => !fresh(rel(file), known[rel(file)]));
-    if (stale.length) built = build(files, reset);
+    const staleSet = new Set(stale);
+    if (stale.length) {
+      if (!build || !configLookups.every(valid) || [...configured].some(([file, before]) => before !== read(file))) {
+        const configs = new Map<string, string | undefined>();
+        configLookups = [];
+        build = programs(root, configs, configLookups);
+        configured = configs;
+      }
+      built = build(files, reset);
+    }
     const entries: Record<string, Entry> = {};
     for (const file of files) {
-      if (!stale.includes(file)) {
+      if (!staleSet.has(file)) {
         entries[rel(file)] = known[rel(file)];
         continue;
       }
@@ -424,7 +437,8 @@ export function generator({ root, out = outOf(root), cap = 12 }: Options): (obse
     write("stories.test.tsx", previous.smoke);
     write("stories.browser.test.tsx", previous.browser);
     write(MANIFEST, previous.manifest);
-    const removed = (existsSync(out) ? readdirSync(out) : []).filter((name) => name.endsWith(".stories.tsx") && !outputs.includes(name));
+    const outputSet = new Set(outputs);
+    const removed = (existsSync(out) ? readdirSync(out) : []).filter((name) => name.endsWith(".stories.tsx") && !outputSet.has(name));
     for (const name of removed) rmSync(join(out, name));
     return { index, written, removed, analyzed: stale.length, diagnostics: index.components.flatMap((c) => c.diagnostics) };
   };

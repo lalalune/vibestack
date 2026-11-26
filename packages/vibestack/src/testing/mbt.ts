@@ -91,6 +91,9 @@ export async function runModel<O extends Oracle<any, any>, Ctx>(
   type S = ModelState<O>;
   type E = ModelEvent<O>;
   type By = ModelSender<O>;
+  if (!options.events.length) {
+    throw new Error("Model test requires at least one event");
+  }
   const transitionNames = Object.keys(adapter.events).sort();
   const plan = planModel<S, E>(oracle as Oracle<S, E>, options.events as readonly Sent<E>[], options.shape ?? "scalar", {
     ...options,
@@ -103,10 +106,39 @@ export async function runModel<O extends Oracle<any, any>, Ctx>(
     );
   }
 
-  let totalSteps = 0;
-  for (const modelPath of plan.paths) {
+  const runWithContext = async (body: (ctx: Ctx) => Promise<void>) => {
     const ctx = await adapter.setup();
+    let primaryError: unknown;
+    let failed = false;
     try {
+      await body(ctx);
+    } catch (error) {
+      failed = true;
+      primaryError = error;
+    }
+    try {
+      await adapter.teardown?.(ctx);
+    } catch (teardownError) {
+      if (!failed) throw teardownError;
+      const primaryMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
+      const teardownMsg = teardownError instanceof Error ? teardownError.message : String(teardownError);
+      throw new Error(`${primaryMsg} (teardown also failed: ${teardownMsg})`, { cause: teardownError });
+    }
+    if (failed) throw primaryError;
+  };
+
+  let totalSteps = 0;
+  if (!plan.paths.length) {
+    await runWithContext(async (ctx) => {
+      try {
+        await adapter.assertState(oracle.initial, ctx, { path: "initial", index: 0, targetState: "initial" });
+      } catch (error) {
+        throw wrapModelError('path "initial", initial state', error);
+      }
+    });
+  }
+  for (const modelPath of plan.paths) {
+    await runWithContext(async (ctx) => {
       try {
         await adapter.assertState(oracle.initial, ctx, {
           path: modelPath.description,
@@ -135,11 +167,12 @@ export async function runModel<O extends Oracle<any, any>, Ctx>(
           if (!step.allowed && adapter.assertRefusal) {
             await adapter.assertRefusal(step.event as ModelInput<E, By>, step.before, ctx, meta);
           } else {
-            const handler = adapter.events[event.type as E["type"]] as (
-              ev: E,
-              c: Ctx,
-              m: ModelStepMeta<S, By>,
-            ) => void | Promise<void>;
+            const handler = adapter.events[event.type as E["type"]] as
+              | ((ev: E, c: Ctx, m: ModelStepMeta<S, By>) => void | Promise<void>)
+              | undefined;
+            if (typeof handler !== "function") {
+              throw new Error(`No handler registered for event type "${event.type}"`);
+            }
             await handler(event, ctx, meta);
           }
         } catch (error) {
@@ -157,9 +190,7 @@ export async function runModel<O extends Oracle<any, any>, Ctx>(
           throw wrapModelError(`${label}, state assertion`, error);
         }
       }
-    } finally {
-      await adapter.teardown?.(ctx);
-    }
+    });
   }
 
   return {

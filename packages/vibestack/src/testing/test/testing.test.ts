@@ -131,11 +131,30 @@ describe("model-based testing", () => {
     }, { events: doorEvents, assertCoverage: true })).rejects.toThrow(/Model test failed at path ".*unlock.*", step \d+ \(unlock\), state assertion/);
     expect(brokenTeardowns).toBeGreaterThan(0);
 
-    await expect(runModel(doorOracle, {
+    const noopDoorAdapter = {
       setup: () => undefined,
       events: { open: () => {}, close: () => {}, lock: () => {}, unlock: () => {} },
       assertState: () => {},
-    }, { events: [{ type: "open" }], assertCoverage: true })).rejects.toThrow(/Model test uncovered transitions.*close, lock, unlock/);
+    };
+    await expect(runModel(doorOracle, noopDoorAdapter, { events: [{ type: "open" }], assertCoverage: true }))
+      .rejects.toThrow(/Model test uncovered transitions.*close, lock, unlock/);
+    await expect(runModel(doorOracle, noopDoorAdapter, { events: [] }))
+      .rejects.toThrow(/Model test requires at least one event/);
+
+    await expect(runModel(doorOracle, {
+      setup: () => ({ status: "Closed" as Door["status"], opens: 0 }),
+      teardown: () => { throw new Error("teardown boom"); },
+      events: {
+        open: () => { throw new Error("primary boom"); },
+        close: () => {},
+        lock: () => {},
+        unlock: () => {},
+      },
+      assertState: () => {},
+    }, { events: doorEvents })).rejects.toThrow(/primary boom.*teardown also failed: teardown boom/);
+
+    const capped = planModel(doorOracle, doorEvents, "scalar", { strategy: "transitions", maxPaths: 2 });
+    expect(capped.coverage.transitions.uncovered).toEqual([]);
   });
 });
 
@@ -309,6 +328,13 @@ export const identity = contract({ input: Schema.Int, run: (value: number) => va
     expect(otherMode.status, otherMode.said).toBe(0);
     expect(fs.readFileSync(receipt, "utf8")).toBe(seeded);
 
+    const pointVibe = path.join(dir, "src/point.vibe");
+    const origPointVibe = fs.readFileSync(pointVibe, "utf8");
+    fs.writeFileSync(pointVibe, `${origPointVibe}\nexport const Extra = Schema.Int\n`);
+    expect((await generateTests(dir)).unchanged).toEqual(files);
+    fs.writeFileSync(pointVibe, origPointVibe);
+    expect(await generateTests(dir)).toEqual({ written: [], unchanged: files, removed: [], skipped });
+
     fs.rmSync(path.join(dir, "src/math.contract.ts"));
     expect(await generateTests(dir)).toEqual({ written: [], unchanged: files.slice(1), removed: files.slice(0, 1), skipped: skipped.slice(1) });
     expect(Object.keys(tree(out))).toEqual(["manifest.json", ...files.slice(1)]);
@@ -362,4 +388,17 @@ it.effect("uses the selected profile", () => Effect.gen(function* () {
     expect(rerun.status).toBe(1);
     expect(rerun.said).toContain("Shrunk input: -1");
   });
+
+  it("does not record a passing receipt for positional file filters or unmatched filters", async () => {
+    const dir = fixture("positional-filter");
+    const receipt = testReceipt(dir);
+    fs.mkdirSync(path.dirname(receipt), { recursive: true });
+    const seeded = JSON.stringify({ fingerprint: testInputs(dir) });
+    for (const filter of ["src/point.schema.test.ts", "nonexistent-test-filter"]) {
+      fs.writeFileSync(receipt, seeded);
+      const run = await vitest(dir, {}, undefined, "normal", [filter]);
+      expect(run.status, run.said).toBe(0);
+      expect(fs.existsSync(receipt)).toBe(false);
+    }
+  }, 120_000);
 });

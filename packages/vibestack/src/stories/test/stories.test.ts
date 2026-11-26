@@ -236,6 +236,9 @@ it("writes the same bytes again, and nothing when nothing changed", () => {
   rmSync(join(out, "stories.browser.test.tsx"));
   expect(run()).toMatchObject({ written: ["catalog.json", "stories.browser.test.tsx"], removed: [], analyzed: 0 });
   expect(everything()).toEqual(before);
+  writeFileSync(join(out, ".cache/manifest.json"), "{corrupt");
+  expect(run().analyzed).toBe(7);
+  expect(everything()).toEqual(before);
   rmSync(out, { recursive: true });
   expect(generator({ root })().written).toHaveLength(10);
   expect(everything()).toEqual(before);

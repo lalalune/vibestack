@@ -1,5 +1,6 @@
 import { existsSync, globSync, readFileSync, realpathSync } from "node:fs"
-import { dirname, join, matchesGlob, posix, relative, resolve, sep } from "node:path"
+import { createRequire } from "node:module"
+import { dirname, join, matchesGlob, posix, resolve, sep } from "node:path"
 import { designSystem } from "./design/eslint.ts"
 import { parseTokens } from "./design/tokens.ts"
 
@@ -996,6 +997,16 @@ function findForbiddenInlineDisable(comments: readonly EslintComment[]): EslintC
   return undefined
 }
 
+function assertNoForbiddenInlineDisable(comments: readonly EslintComment[] | undefined): void {
+  const forbidden = findForbiddenInlineDisable(comments ?? [])
+  if (forbidden) {
+    throw Object.assign(
+      new SyntaxError("Inline eslint-disable cannot suppress barrel/* or omit rule names."),
+      { lineNumber: forbidden.loc.start.line, column: forbidden.loc.start.column + 1 },
+    )
+  }
+}
+
 function guardBarrelDisable(parser: EslintParser): EslintParser {
   if (protectedParsers.has(parser)) return parser
   const existing = guardedParsers.get(parser)
@@ -1008,13 +1019,7 @@ function guardBarrelDisable(parser: EslintParser): EslintParser {
     },
     parseForESLint(text: string, options?: unknown) {
       const parsed = parser.parseForESLint(text, options)
-      const forbidden = findForbiddenInlineDisable(parsed.ast.comments ?? [])
-      if (forbidden) {
-        throw Object.assign(
-          new SyntaxError("Inline eslint-disable cannot suppress barrel/* or omit rule names."),
-          { lineNumber: forbidden.loc.start.line, column: forbidden.loc.start.column + 1 },
-        )
-      }
+      assertNoForbiddenInlineDisable(parsed.ast.comments)
       return parsed
     },
   }
@@ -1037,11 +1042,42 @@ function isEslintParser(value: unknown): value is EslintParser {
   return typeof value === "object" && value !== null && "parseForESLint" in value && typeof value.parseForESLint === "function"
 }
 
-/**
- * Wraps an ESLint flat config to enforce barrel-only workspace exports (`barrel/exports` on workspace
- * `package.json` manifests) and barrel-only workspace imports (`barrel/no-subpath-imports` on JS/TS/VibeLang),
- * isolating `package.json` from non-manifest rules and blocking inline `eslint-disable` bypasses.
- */
+function createDefaultJsGuardedParser(root: string): EslintParser | undefined {
+  let espree: {
+    readonly version?: string
+    parse(text: string, options?: Record<string, unknown>): { readonly comments?: readonly EslintComment[]; readonly [key: string]: unknown }
+  } | undefined
+  for (const anchor of [join(root, "package.json"), import.meta.url]) {
+    try {
+      const eslintPkg = createRequire(anchor).resolve("eslint/package.json")
+      espree = createRequire(eslintPkg)("espree") as typeof espree
+      break
+    } catch {
+      continue
+    }
+  }
+  if (!espree) return undefined
+  const parser: EslintParser = {
+    meta: { name: "espree with barrel/inline", version: espree.version ?? "1.0.0" },
+    parseForESLint(text: string, options?: unknown) {
+      const opts = options && typeof options === "object" ? options as Record<string, unknown> : {}
+      const ast = espree.parse(text, {
+        ...opts,
+        ecmaVersion: opts.ecmaVersion ?? "latest",
+        sourceType: opts.sourceType ?? "module",
+        loc: true,
+        range: true,
+        comment: true,
+        tokens: true,
+      })
+      assertNoForbiddenInlineDisable(ast.comments)
+      return { ast }
+    },
+  }
+  protectedParsers.add(parser)
+  return parser
+}
+
 export function withWorkspaceBarrels<T extends FlatConfig = FlatConfig>(
   config: readonly T[],
   options: WorkspaceBarrelsOptions,
@@ -1074,6 +1110,19 @@ export function withWorkspaceBarrels<T extends FlatConfig = FlatConfig>(
     }
     return next as T
   })
+
+  const defaultJsParser = createDefaultJsGuardedParser(root)
+  if (defaultJsParser) {
+    const firstNonIgnore = transformed.findIndex((entry) => !isGlobalIgnore(entry))
+    const defaultGuard = {
+      name: "vibestack/barrel-default-js-guard",
+      files: ["**/*.{js,mjs,cjs,jsx}"],
+      ignores: ["**/package.json"],
+      languageOptions: { parser: defaultJsParser },
+    } satisfies FlatConfig
+    if (firstNonIgnore < 0) transformed.push(defaultGuard as unknown as T)
+    else transformed.splice(firstNonIgnore, 0, defaultGuard as unknown as T)
+  }
 
   const importsEntry = {
     name: "vibestack/barrel-imports",
@@ -1147,7 +1196,7 @@ const STACK_REF = 'AGENTS.md, "The stack"'
 const WRITING_REF = 'AGENTS.md, "Writing code"'
 const BANNED_PACKAGES = ["redux", "react-redux", "zustand", "mobx", "jotai", "recoil", "valtio", "xstate", "vue", "svelte", "jest"]
 const BANNED_SCOPES = ["reduxjs", "angular", "xstate", "vue", "sveltejs", "jest"]
-const STACK_IMPORT_PATTERNS = [
+export const STACK_IMPORT_PATTERNS = [
   { regex: `^(?:@(?:${BANNED_SCOPES.join("|")})/|(?:${BANNED_PACKAGES.join("|")})(?:[/-]|$))`, message: `Not part of the stack: ${STACK_REF}.` },
 ]
 
@@ -1163,10 +1212,10 @@ const CODE_DIRECTIVES: Record<string, RegExp[]> = {
   Block: [CITED_RE, ...ALLOWED_INLINE_CONFIGS, /^\*(?:[\s*]*@(?:model|design) \S+)+[\s*]*$/, THROWS_DIRECTIVE_RE],
   Shebang: [/^/],
 }
-const ANY_INLINE_CONFIG_RE = /^\s*(?:eslint(?:-[a-z]+)*|exported|globals?)(?:\s|$)/
+const ANY_INLINE_CONFIG_RE = /^\s*(?:eslint(?:-[a-z]+)*|exported|globals?)(?:\s|$)/i
 
 function createGuardedParser(parser: EslintParser): EslintParser {
-  return {
+  const wrapped: EslintParser = {
     meta: { name: `${parser.meta?.name ?? "parser"} with code/inline`, version: parser.meta?.version ?? "1.0.0" },
     parseForESLint(text: string, options?: unknown) {
       const parsed = parser.parseForESLint(text, options)
@@ -1181,9 +1230,12 @@ function createGuardedParser(parser: EslintParser): EslintParser {
       return parsed
     },
   }
+  protectedParsers.add(wrapped)
+  return wrapped
 }
 
 function createCodePlugin(root: string) {
+  const canonicalRoot = canonicalPath(root)
   const withinFunction = (node: AstNode | undefined): boolean =>
     Boolean(node) && (/Function/.test(String(node?.type ?? "")) || withinFunction(node?.parent as AstNode | undefined))
   const isDocComment = (context: any, comment: any) =>
@@ -1191,12 +1243,12 @@ function createCodePlugin(root: string) {
     && !withinFunction(context.sourceCode.getNodeByRangeIndex(comment.range[0]))
   const leftSchema = { type: "object", additionalProperties: { type: "integer", minimum: 1 } }
   const reportIfExcess = (context: any, node: AstNode, found: any[], kind: "commented" | "scheduled") => {
-    const rel = relative(root, context.filename).split(sep).join("/")
+    const rel = relativePosixPath(canonicalRoot, context.cwd, context.filename)
     const limits = context.options[0]?.left as Record<string, number> | undefined
-    const allowed = limits && Object.hasOwn(limits, rel) ? limits[rel] : 0
+    const allowed = rel && limits && Object.hasOwn(limits, rel) ? limits[rel] : 0
     if (found.length > allowed) {
       for (const problem of found) context.report(problem)
-    } else if (allowed > 0 && found.length < allowed) {
+    } else if (rel && allowed > 0 && found.length < allowed) {
       context.report({
         node,
         message: found.length === 0
@@ -1361,7 +1413,16 @@ export function vibestackConfig(options: VibestackConfigOptions): FlatConfig[] {
     if (existsSync(tokensFile)) {
       const tokens = parseTokens(JSON.parse(readFileSync(tokensFile, "utf8")))
       const dsConfigs = designSystem({ tailwind: plugins.tailwind, tokens, entryPoint: join(root, design, "generated/theme.css") })
-      entries.push(...scopeEntries(dsConfigs as unknown as FlatConfig[], tsx, { settings: { "better-tailwindcss": { cwd: join(root, design) } } }))
+      const tsxOnly = tsx
+        .map((pattern) => pattern.replace(/\.\{ts,tsx\}$/, ".tsx"))
+        .filter((pattern) => !pattern.endsWith(".ts"))
+      for (const entry of dsConfigs as unknown as FlatConfig[]) {
+        const onlyTsx = Array.isArray(entry.files) && entry.files.length > 0
+          && entry.files.every((pattern) => typeof pattern === "string" && pattern.endsWith(".tsx"))
+        const scopedFiles = onlyTsx ? tsxOnly : tsx
+        if (scopedFiles.length === 0) continue
+        entries.push(...scopeEntries([entry], scopedFiles, onlyTsx ? {} : { settings: { "better-tailwindcss": { cwd: join(root, design) } } }))
+      }
     }
   }
 
@@ -1382,7 +1443,14 @@ export function vibestackConfig(options: VibestackConfigOptions): FlatConfig[] {
       entries.push({ files: own, ignores: ["**/*.{vibe,vibex}"], languageOptions: { parser: createGuardedParser(tsPlugin.parser) } })
     }
     if (vibeParser) {
-      entries.push({ files: own.map((pattern) => pattern.replace(/\/\*\*$/, "/**/*.{vibe,vibex}")), languageOptions: { parser: createGuardedParser(vibeParser) } })
+      const ownVibe = own.map((pattern) =>
+        pattern.endsWith("/**") ? `${pattern}/*.{vibe,vibex}`
+          : pattern.endsWith("/**/*") ? `${pattern}.{vibe,vibex}`
+          : /\.\{[^}]*\}$/.test(pattern) ? pattern.replace(/\.\{[^}]*\}$/, ".{vibe,vibex}")
+          : /\.[a-z]+$/i.test(pattern) ? pattern.replace(/\.[a-z]+$/i, ".{vibe,vibex}")
+          : `${pattern.replace(/\/+$/, "")}/**/*.{vibe,vibex}`,
+      )
+      entries.push({ files: ownVibe, languageOptions: { parser: createGuardedParser(vibeParser) } })
     }
     entries.push({ files: own, plugins: { code: codePlugin }, rules: { "no-console": "error", "code/comments": ["error", { left: commented }], "code/effects": ["error", { left: scheduled }] } })
     if (uiPackage) {
