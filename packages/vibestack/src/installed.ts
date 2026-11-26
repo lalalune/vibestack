@@ -31,7 +31,7 @@ const readSaid = (inspect = false): Said => {
     const parsed: unknown = JSON.parse(fs.readFileSync(LASTING, "utf8"));
     if (typeof parsed !== "object" || parsed === null) return {};
     const valid = Object.entries(parsed).filter(([, k]) => isKnown(k));
-    if (inspect && (valid.length > MAX_TOOLCHAIN_ENTRIES || valid.some(([, k]) => k.files.length > 0 && k.files[0].startsWith(programsPrefix)))) {
+    if (inspect && (valid.length > MAX_TOOLCHAIN_ENTRIES || valid.some(([, k]) => k.files.length > 8 || (k.files.length > 0 && k.files[0].startsWith(programsPrefix))))) {
       needsCompact = true;
     }
     return Object.fromEntries(valid);

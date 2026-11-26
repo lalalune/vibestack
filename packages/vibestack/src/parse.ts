@@ -65,6 +65,10 @@ export function specName(file: string, specDir = "spec"): string {
  * Markdown file. A fence of any other kind is prose; scan.ts reads the fences.
  */
 export function parseSpec(root: string, file: string, text = fs.readFileSync(located(root, file), "utf8"), specDir = "spec"): Spec {
+  return parseSpecInternal(root, file, text, specDir, false);
+}
+
+function parseSpecInternal(root: string, file: string, text = fs.readFileSync(located(root, file), "utf8"), specDir = "spec", deferFinish = false): Spec {
   const name = specName(file, specDir);
   const rules: Rule[] = [];
   const stories: Story[] = [];
@@ -155,7 +159,7 @@ export function parseSpec(root: string, file: string, text = fs.readFileSync(loc
   try {
     const sources = importsOf(tangled);
     const spec: Spec = { name, file, preamble, references, links: [], rules, stories, imports: sources.map((i) => i.module), uses: sources, qnt: "", tangled, code: "", builtins: [] };
-    finish(spec, tangled);
+    if (!deferFinish) finish(spec, tangled);
     importSources.set(spec, sources);
     return spec;
   } catch (e) {
@@ -354,7 +358,7 @@ export function readSpecs(root: string, texts?: Record<string, string>, ownerNam
     return spec;
   };
   for (const file of files)
-    if (ownerName === undefined || file.startsWith(`${specDir}/${ownerName}/`)) add(parseSpec(root, file, texts?.[file], specDir));
+    if (ownerName === undefined || file.startsWith(`${specDir}/${ownerName}/`)) add(parseSpecInternal(root, file, texts?.[file], specDir, true));
   if (!all.length) throw new Error(`${ownerName}: no specs under ${specDir}/${ownerName}/`);
   const roots = all.slice();
   const resolveTarget = (spec: Spec, target: string, line: number, library: boolean, allowExcluded: boolean): Spec | undefined => {
@@ -373,13 +377,13 @@ export function readSpecs(root: string, texts?: Record<string, string>, ownerNam
     const found = candidates.flatMap((file) => {
       const existing = byFile.get(file);
       if (existing !== undefined) return [existing];
-      return ownerName !== undefined && available.has(file) ? [add(parseSpec(root, file, texts?.[file], specDir))] : [];
+      return ownerName !== undefined && available.has(file) ? [add(parseSpecInternal(root, file, texts?.[file], specDir, true))] : [];
     });
     if (!found.length && (library || isStd(spec.file))) {
       // A bare sibling import may name a library shipped with the tools, after the local path was tried.
       const sibling = link.match(/^(?:\.\/)?([a-z][A-Za-z0-9]*)(?:\.md)?$/);
       const bundled = isStd(spec.file) ? candidates : sibling ? [`std/${sibling[1]}.md`] : [];
-      for (const file of bundled) if (fs.existsSync(located(root, file))) found.push(byFile.get(file) ?? add(parseSpec(root, file, undefined, specDir)));
+      for (const file of bundled) if (fs.existsSync(located(root, file))) found.push(byFile.get(file) ?? add(parseSpecInternal(root, file, undefined, specDir, true)));
     }
     if (found.length !== 1) return fail(found.length ? "the path is ambiguous: name the .md file" : "no spec at this path (a directory needs index.md)");
     return found[0];
@@ -399,7 +403,11 @@ export function readSpecs(root: string, texts?: Record<string, string>, ownerNam
     spec.imports = spec.uses.map((i) => i.module);
     for (const { line, column, length, value } of replacements.sort((a, b) => b.line - a.line || b.column - a.column))
       lines[line - 1] = lines[line - 1].slice(0, column) + value + lines[line - 1].slice(column + length);
-    if (replacements.length) finish(spec, lines.join("\n"));
+    try {
+      finish(spec, replacements.length ? lines.join("\n") : spec.tangled);
+    } catch (e) {
+      throw new Error(`${spec.file}:${(e as Error).message}`, { cause: e });
+    }
     spec.links = [...new Set(spec.references.flatMap(({ target, line }) => {
       const targetSpec = resolveTarget(spec, target, line, false, true);
       return targetSpec ? [targetSpec.file] : [];

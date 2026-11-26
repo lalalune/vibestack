@@ -72,15 +72,23 @@ function readJsonFile(file: string): unknown {
   }
 }
 
+const SPEC_AREA = /^[a-z][A-Za-z0-9]*$/;
+const OWNER_DIR = /^(?:apps|packages)\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 function parseOwnersRecord(value: unknown, field: string, source: string): Record<string, string> {
   if (!isRecord(value)) {
-    throw new Error(`${source}: ${field} must be an object mapping spec areas to workspace directories`);
+    throw new Error(`${source}: ${field} must map spec areas to workspace directories`);
   }
   const owners: Record<string, string> = {};
+  const claimed = new Set<string>();
   for (const [area, dir] of Object.entries(value)) {
-    if (typeof dir !== "string") {
-      throw new Error(`${source}: ${field}.${area} must be a string path`);
+    if (!SPEC_AREA.test(area) || typeof dir !== "string" || !OWNER_DIR.test(dir)) {
+      throw new Error(`${source}: ${field}.${area} must map a spec area to a workspace directory under apps/ or packages/`);
     }
+    if (claimed.has(dir)) {
+      throw new Error(`${source}: ${field} assigns ${dir} to more than one spec area`);
+    }
+    claimed.add(dir);
     owners[area] = dir;
   }
   return owners;
@@ -139,20 +147,35 @@ function parseRawConfig(raw: unknown, source: string): VibestackConfig {
   return parsed;
 }
 
+const CONFIG_CACHE_LIMIT = 64;
+const configCache = new Map<string, { stamp: string; config: ResolvedVibestackConfig }>();
+
+function statStamp(file: string): string {
+  const s = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+  return s ? `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}` : "";
+}
+
 export function loadConfig(root: string): ResolvedVibestackConfig {
-  const configFile = path.join(root, "vibestack.json");
-  const packageFile = path.join(root, "package.json");
+  const resolvedRoot = path.resolve(root);
+  const configFile = path.join(resolvedRoot, "vibestack.json");
+  const packageFile = path.join(resolvedRoot, "package.json");
+  const stamp = `${statStamp(configFile)}|${statStamp(packageFile)}`;
+  const cached = configCache.get(resolvedRoot);
+  if (cached && cached.stamp === stamp) return cached.config;
+
   const pkg = fs.existsSync(packageFile) ? readJsonFile(packageFile) : undefined;
   const pkgRecord = isRecord(pkg) ? pkg : {};
 
   let rawConfig: VibestackConfig = {};
+  let configSource = "package.json#vibestack";
   if (fs.existsSync(configFile)) {
-    rawConfig = parseRawConfig(readJsonFile(configFile), "vibestack.json");
+    configSource = "vibestack.json";
+    rawConfig = parseRawConfig(readJsonFile(configFile), configSource);
   } else if (pkgRecord.vibestack !== undefined) {
-    rawConfig = parseRawConfig(pkgRecord.vibestack, "package.json#vibestack");
+    rawConfig = parseRawConfig(pkgRecord.vibestack, configSource);
   }
 
-  const pkgOwners = pkgRecord.specOwners !== undefined && isRecord(pkgRecord.specOwners)
+  const pkgOwners = pkgRecord.specOwners !== undefined
     ? parseOwnersRecord(pkgRecord.specOwners, "specOwners", "package.json")
     : {};
 
@@ -160,13 +183,21 @@ export function loadConfig(root: string): ResolvedVibestackConfig {
   const specDir = rawConfig.spec?.dir ?? "spec";
   const exclude = rawConfig.spec?.exclude ?? [];
   const owners = { ...pkgOwners, ...(rawConfig.spec?.owners ?? {}) };
+  const claimed = new Set<string>();
+  for (const [area, dir] of Object.entries(owners)) {
+    if (claimed.has(dir)) {
+      const fromConfig = rawConfig.spec?.owners && Object.hasOwn(rawConfig.spec.owners, area);
+      throw new Error(`${fromConfig ? `${configSource}: spec.owners` : "package.json: specOwners"} assigns ${dir} to more than one spec area`);
+    }
+    claimed.add(dir);
+  }
   const cacheDir = rawConfig.cacheDir ?? ".spec-cache";
 
   const defaultTypes: TypesStageMode = mode === "specs-only" ? "skip" : mode === "typescript" ? "tsc" : "vibelang";
   const defaultTests: TestsStageMode = mode === "specs-only" ? "skip" : mode === "typescript" ? "custom" : "vitest";
   const defaultExplore: ExploreStageMode = mode === "specs-only" ? "skip" : "auto";
 
-  return {
+  const resolved: ResolvedVibestackConfig = {
     mode,
     spec: { dir: specDir, exclude, owners },
     cacheDir,
@@ -176,6 +207,11 @@ export function loadConfig(root: string): ResolvedVibestackConfig {
       explore: rawConfig.stages?.explore ?? defaultExplore,
     },
   };
+  if (!configCache.has(resolvedRoot) && configCache.size >= CONFIG_CACHE_LIMIT) {
+    configCache.delete(configCache.keys().next().value!);
+  }
+  configCache.set(resolvedRoot, { stamp, config: resolved });
+  return resolved;
 }
 
 export function isExcludedSpecPath(relPosixPath: string, specConfig: Pick<ResolvedVibestackConfig["spec"], "dir" | "exclude">): boolean {

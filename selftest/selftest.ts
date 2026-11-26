@@ -5596,3 +5596,82 @@ describe("the tools", { concurrency: true }, () => {
   describe("the command line and what a failed proof leaves to start from", { concurrency: REST_LANES }, theCommandLine);
   describe("each check catches its own kind of mistake", { concurrency: REST_LANES }, eachCheck);
 });
+
+test("custom spec.dir accept/check round-trip with citations, -- separator for --timings, LPT flag validation, and watch no-loop on owner gen/", async () => {
+  const cli = path.join(project, "packages/vibestack/src/spec.ts");
+  const custom = scratch({
+    "package.json": JSON.stringify({ name: "custom-spec-dir", private: true, type: "module", scripts: { test: "node -e 0" } }),
+    "tsconfig.json": JSON.stringify({ compilerOptions: { target: "es2023", module: "nodenext", strict: true, noEmit: true, allowImportingTsExtensions: true } }),
+    "vibestack.json": JSON.stringify({
+      mode: "typescript",
+      spec: { dir: "specs", exclude: ["drafts"] },
+      stages: { explore: "skip" },
+    }),
+    "specs/drafts/ignored.md": "# Ignored\n```quint\nbad quint\n```\n",
+    "specs/drafts/ignored.proof.dfy": "lemma Ignored() {}\n",
+    "specs/index.md": [
+      "# Custom",
+      "",
+      "## Story: Keep score",
+      "",
+      "### Score stays nonnegative",
+      "",
+      "```quint",
+      "pure val initial: int = 0",
+      "pure def canInc(n: int): bool = n < 2",
+      "pure def inc(n: int): int = n + 1",
+      "pure def alwaysNonNeg(n: int): bool = n >= 0",
+      "pure def sometimesTwo(n: int): bool = n == 2",
+      "```",
+      "",
+    ].join("\n"),
+    "src/app.ts": [
+      '// specs/index.md, "Score stays nonnegative"',
+      "export const score = (n: number) => n + 1;",
+      "",
+    ].join("\n"),
+    "test/app.test.ts": [
+      '// specs/index.md, "Story: Keep score"',
+      'import { score } from "../src/app.ts";',
+      'const test = (_name: string, fn: () => void) => fn();',
+      'test("keeps score", () => { if (score(0) !== 1) throw new Error("bad"); });',
+      "",
+    ].join("\n"),
+  });
+
+  const accepted = await runCli(cli, custom, "accept");
+  assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+  assert.ok(fs.existsSync(path.join(custom, "specs/lock.json")), "accept writes lock.json under custom spec.dir");
+
+  const rechecked = await runCli(cli, custom, "check", "--", "--timings");
+  assert.equal(rechecked.status, 0, rechecked.stdout + rechecked.stderr);
+  assert.match(rechecked.stdout, /next: all green/);
+  assert.match(rechecked.stdout, /timings:\n/);
+
+  const badShard = await runCli(cli, custom, "ci", "precompute-simulations", "--shard", "-1", "--shards", "2", "--list");
+  assert.notEqual(badShard.status, 0);
+  assert.match(badShard.stderr + badShard.stdout, /invalid shard parameters/);
+
+  const missingWeights = await runCli(cli, custom, "ci", "precompute-simulations", "--shard", "1", "--shards", "2", "--list", "--weights");
+  assert.notEqual(missingWeights.status, 0);
+  assert.match(missingWeights.stderr + missingWeights.stdout, /requires a value/);
+
+  const watchRoot = scratch({
+    "package.json": JSON.stringify({ name: "watch-owner", private: true, type: "module" }),
+    "vibestack.json": JSON.stringify({ mode: "specs-only" }),
+    "spec/index.md": "# Root\n",
+    "spec/app/index.md": "# App\n\n## Story: Value\n\n### Always one\n\n```quint\npure val one = 1\n```\n",
+    "apps/app/package.json": JSON.stringify({ name: "@watch/app", private: true, type: "module" }),
+  });
+  const watcher = watching(watchRoot);
+  try {
+    await watcher.waitFor(() => watcher.checks() === 1);
+    fs.writeFileSync(path.join(watchRoot, "apps/app/gen/.touch"), "ignored\n");
+    fs.mkdirSync(path.join(watchRoot, "apps/app/.cache"), { recursive: true });
+    fs.writeFileSync(path.join(watchRoot, "apps/app/.cache/tmp.json"), "{}\n");
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.equal(watcher.checks(), 1, "touching owner gen/ or .cache/ must not trigger a spurious watch re-check");
+  } finally {
+    await watcher.stop();
+  }
+});
