@@ -205,6 +205,12 @@ async function genAll(root: string): Promise<string[]> {
 }
 /** Run a fresh CLI process so toolchain fingerprints cannot carry over from another invocation. */
 const runCli = (script: string, root: string, ...args: string[]) => exec(process.execPath, [script, ...args], root);
+function linkReactModules(root: string) {
+  const modules = path.join(root, "node_modules");
+  fs.mkdirSync(modules);
+  for (const dir of [path.join(project, "packages/studio/node_modules"), nodeModules])
+    for (const entry of fs.readdirSync(dir)) if (!fs.existsSync(path.join(modules, entry))) fs.symlinkSync(path.join(dir, entry), path.join(modules, entry));
+}
 /** `spec watch` of a project: what it has printed, a wait for what it prints next while it runs, and a stop. */
 function watching(root: string, cwd = root) {
   const watcher = spawn(process.execPath, [path.join(project, "packages/vibestack/src/spec.ts"), "watch", root], { cwd, stdio: ["ignore", "pipe", "pipe"] });
@@ -274,6 +280,33 @@ pure def selected(which: bool): Set[Field] = {
     const domain = await import(pathToFileURL(path.join(root, "gen", "fields.ts")).href);
     assert.deepEqual([domain.required(true), domain.required(false)], [["First", "Second"], ["First"]]);
     assert.deepEqual([domain.selected(true), domain.selected(false)], [["First", "Second"], ["Second"]]);
+  });
+
+  test("a record literal beside ==, a mapped list literal, and an in-place variant update state their types in the prover's code", async () => {
+    const root = oneRule("steps", "Step records", `type Status = Ready | Done
+type Entry = Open({ count: int, status: Status }) | Closed
+type Step = { state: int, out: List[int] }
+type Other = { state: int, out: List[int], spare: bool }
+pure def recordOf(n: int): Step = { state: n, out: List(n) }
+pure def other(n: int): Other = { state: n + 1, out: List(), spare: true }
+pure def lawStepIsItsRecord(n: int): bool = recordOf(n) == { state: n, out: List(n) }
+pure def shifted(n: int): List[int] = List(1, 2).listMap(x => x + n)
+pure def finish(entry: Entry): Entry = match entry {
+  | Open(o) => Open({ ...o, status: Done })
+  | Closed => Closed
+}`);
+    const model = await gen(root, parseSpec(root, "spec/steps.md"));
+    const checked = await tool("vibelang", ["--noEmit", "--strict", "--target", "es2023", "gen/steps.ts"], root);
+    assert.ok(checked.ok, checked.out);
+    const proof = model.render("");
+    assert.match(proof, /recordOf\(n\) === typed\d+_steps\(\{ state: n, out: \(\[n\] as number\[\]\) \}\)/);
+    assert.doesNotMatch(proof, /=== \(\{ state: n, out: \(\[n\] as number\[\]\) \} as Step\)/);
+    assert.match(proof, /typed\d+_steps\(\(\[1, 2\] as number\[\]\)\)\.map\(/);
+    assert.match(proof, /status: typed\d+_steps\("Done"\)/);
+    const domain = await import(pathToFileURL(path.join(root, "gen", "steps.ts")).href);
+    assert.equal(domain.lawStepIsItsRecord(3), true);
+    assert.deepEqual(domain.shifted(1), [2, 3]);
+    assert.deepEqual(domain.finish({ tag: "Open", count: 1, status: "Ready" }), { tag: "Open", count: 1, status: "Done" });
   });
 
   test("the explore stage finds a page that breaks a property, keeps the trace, replays it first, and drops it once fixed", { skip: !["linux-x64", "linux-arm64", "darwin-arm64"].includes(`${process.platform}-${process.arch}`) }, async () => {
@@ -1523,33 +1556,46 @@ export effect function independent() {
     const paired = await exec(process.execPath, ["--import", "vibelang/register", "--input-type=module", "-e", 'import assert from "node:assert/strict"; import { Effect } from "effect"; import { independent } from "./src/pair.vibe"; assert.deepEqual(await Effect.runPromise(independent()), [1, 0]);'], first);
     assert.equal(paired.status, 0, paired.stdout + paired.stderr);
     const isolated = scratch({ "package.json": PACKAGE["package.json"], "spec/index.md": ruleSpec(`type Item = { n: int }
-type State = { item: Item }
+type State = { item: Item, kept: Item }
 type Result = { state: State, out: List[Item] }
-pure val initial: State = { item: { n: 0 } }
+pure val initial: State = { item: { n: 0 }, kept: { n: 10 } }
 pure val entryValues = Set({ n: 0 }, { n: 2 })
 pure def canSetItem(s: State, entry: Item): bool = entry.n >= 0
-pure def setItem(s: State, entry: Item): Result = { state: { item: entry }, out: List(entry) }`), "src/probe.vibe": `import { Machine, machine } from "../gen/index.effect.vibe"
+pure def setItem(s: State, entry: Item): Result = { state: { ...s, item: entry }, out: List(entry) }`), "src/probe.vibe": `import { Machine, machine } from "../gen/index.effect.vibe"
+function refuses(act: () => void): boolean {
+  try { act(); return false } catch (error) { return error instanceof TypeError }
+}
 export effect function probe() {
-  const start = { item: { n: 0 } }
+  const start = { item: { n: 0 }, kept: { n: 10 } }
   provide machine(start) {
     start.item.n = 42
     const held = try Machine
     const first = try held.get()
+    const again = try held.get()
     const before = first.item.n
-    first.item.n = 43
+    const frozenGet = refuses(() => { first.item.n = 43 })
     const event = { type: "setItem" as const, entry: { n: 2 } }
     const after = try held.send(event)
-    after.state.item.n = 44
-    after.out[0].n = 45
+    const frozenState = refuses(() => { after.state.item.n = 44 })
+    const frozenOut = refuses(() => { after.out[0].n = 45 })
     event.entry.n = 46
-    try Stream.runHead(Stream.map(held.changes, (state) => { state.item.n = 47; return state }))
-    held.send({ type: "setItem", entry: { n: -1 } }) catch (error) => { error.state.item.n = 48 }
-    return [before, (try held.get()).item.n]
+    const fromChanges = try Stream.runHead(held.changes)
+    const changed = fromChanges._tag === "Some" ? fromChanges.value : undefined
+    const frozenChange = changed !== undefined && refuses(() => { changed.item.n = 47 })
+    const frozenError = held.send({ type: "setItem", entry: { n: -1 } }) catch (error) => refuses(() => { error.state.item.n = 48 })
+    return {
+      before,
+      after: (try held.get()).item.n,
+      sameGet: first === again,
+      sharedBranch: after.state.kept === first.kept,
+      sameChange: changed === after.state,
+      frozen: frozenGet && frozenState && frozenOut && frozenChange && frozenError,
+    }
   }
 }
 ` });
     await genAll(isolated);
-    const protectedState = await exec(process.execPath, ["--import", "vibelang/register", "--input-type=module", "-e", 'import assert from "node:assert/strict"; import { Effect } from "effect"; import { probe } from "./src/probe.vibe"; assert.deepEqual(await Effect.runPromise(probe()), [0, 2]);'], isolated);
+    const protectedState = await exec(process.execPath, ["--import", "vibelang/register", "--input-type=module", "-e", 'import assert from "node:assert/strict"; import { Effect } from "effect"; import { probe } from "./src/probe.vibe"; assert.deepEqual(await Effect.runPromise(probe()), { before: 0, after: 2, sameGet: true, sharedBranch: true, sameChange: true, frozen: true });'], isolated);
     assert.equal(protectedState.status, 0, protectedState.stdout + protectedState.stderr);
   });
 
@@ -4165,10 +4211,7 @@ export function useShown(counter: ManagedRuntime.ManagedRuntime<Machine, never>,
 `,
     });
     // Studio depends on react, so its packages, with the tools' own beside them, are the ones a package with a React interface resolves.
-    const modules = path.join(root, "node_modules");
-    fs.mkdirSync(modules);
-    for (const dir of [path.join(project, "packages/studio/node_modules"), nodeModules])
-      for (const entry of fs.readdirSync(dir)) if (!fs.existsSync(path.join(modules, entry))) fs.symlinkSync(path.join(dir, entry), path.join(modules, entry));
+    linkReactModules(root);
     // A library has no machine, and so no hook.
     assert.deepEqual((await genAll(root)).filter((f) => f.endsWith(".react.ts")), ["index.react.ts", "vault.react.ts"]);
     const compiled = await tool("vibelang", ["--noEmit", "-p", "."], root);
@@ -4219,6 +4262,226 @@ assert.deepEqual(outcome, ["Rejected", 1, 2]);`], root);
     delete appBefore["stale.ts"];
     assert.deepEqual([appAfter, rootAfter["app.ts"], Object.keys(plainAfter)], [appBefore, rootBefore["app.ts"], Object.keys(plainBefore)]);
     assert.notEqual(read("apps/plain/gen/plain.ts", tree), plainText);
+  });
+
+  test("stored caches decoded frozen states per store and key, invalidates on external changes, and useMachine supports selectors and stable helpers", async () => {
+    const manifest = JSON.stringify({ name: "cached-hooks", type: "module", dependencies: { react: "19" } });
+    const root = scratch({
+      "package.json": manifest,
+      "tsconfig.json": PACKAGE["tsconfig.json"],
+      "spec/board.md": ruleSpec(`type State = { count: int, note: str }
+pure val initial: State = { count: 0, note: "" }
+pure def canInc(s: State): bool = s.count < 3
+pure def inc(s: State): State = { ...s, count: s.count + 1 }
+pure def rename(s: State, text: str): State = { ...s, note: text }
+pure def touch(s: State): State = s
+pure def alwaysValid(s: State): bool = 0 <= s.count and s.count <= 3`),
+      "src/hooks.ts": `import type { ManagedRuntime } from "effect";
+import type { Machine } from "../gen/board.effect.vibe";
+import { useMachine, useMachineSelector } from "../gen/board.react.ts";
+
+export function useTyped(runtime: ManagedRuntime.ManagedRuntime<Machine, never>) {
+  const full = useMachine(runtime);
+  const sliced = useMachine(runtime, (s) => ({ count: s?.count ?? -1 }), (a, b) => a.count === b.count);
+  const count = useMachineSelector(runtime, (s) => s?.count);
+  return { full, sliced, count };
+}
+`,
+    });
+    linkReactModules(root);
+    await genAll(root);
+    const compiled = await tool("vibelang", ["--noEmit", "-p", "."], root);
+    assert.ok(compiled.ok, compiled.out);
+    const verified = await exec(process.execPath, ["--import", "vibelang/register", "--input-type=module", "-e", `import assert from "node:assert/strict";
+import { Effect, Layer, ManagedRuntime } from "effect";
+import * as KeyValueStore from "effect/persistence/KeyValueStore";
+import { Window } from "happy-dom";
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
+import { Machine, machine, stored } from "./gen/board.effect.vibe";
+import { useMachine, useMachineSelector } from "./gen/board.react.ts";
+
+const backing = new Map();
+let sets = 0;
+let parses = 0;
+const realParse = JSON.parse;
+JSON.parse = (...args) => { parses += 1; return realParse(...args); };
+const store = KeyValueStore.makeStringOnly({
+  get: (key) => Effect.sync(() => backing.get(key)),
+  set: (key, value) => Effect.sync(() => { sets += 1; backing.set(key, value); }),
+  remove: (key) => Effect.sync(() => { backing.delete(key); }),
+  clear: Effect.sync(() => { backing.clear(); }),
+  size: Effect.sync(() => backing.size),
+});
+const layer = stored("board").pipe(Layer.provide(Layer.succeed(KeyValueStore.KeyValueStore, store)));
+await Effect.runPromise(Effect.gen(function*() {
+  const m = yield* Machine;
+  const s1 = yield* m.send({ type: "inc" });
+  assert.equal(Object.isFrozen(s1), true);
+  assert.equal(sets, 1);
+  const beforeReads = parses;
+  const g1 = yield* m.get();
+  const g2 = yield* m.get();
+  assert.equal(g1, s1);
+  assert.equal(g2, s1);
+  assert.equal(parses, beforeReads);
+  const touched = yield* m.send({ type: "touch" });
+  assert.equal(touched, s1);
+  assert.equal(sets, 1);
+  backing.set("board", JSON.stringify({ count: 2, note: "ext" }));
+  const g3 = yield* m.get();
+  assert.deepEqual(g3, { count: 2, note: "ext" });
+  assert.equal(Object.isFrozen(g3), true);
+  const afterMiss = parses;
+  assert.ok(afterMiss > beforeReads);
+  const g4 = yield* m.get();
+  assert.equal(g4, g3);
+  assert.equal(parses, afterMiss);
+  backing.delete("board");
+  const g5 = yield* m.get();
+  assert.deepEqual(g5, { count: 0, note: "" });
+  assert.equal(Object.isFrozen(g5), true);
+}).pipe(Effect.provide(layer)));
+JSON.parse = realParse;
+
+const win = new Window();
+Object.assign(globalThis, {
+  window: win,
+  document: win.document,
+  HTMLElement: win.HTMLElement,
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+const runtime = ManagedRuntime.make(machine());
+const fullRenders = [];
+const countRenders = [];
+const eqRenders = [];
+function Full() {
+  const h = useMachine(runtime);
+  fullRenders.push({ state: h.state, can: h.can, send: h.send, canInc: h.can({ type: "inc" }) });
+  return React.createElement("span", null, h.state?.note ?? "");
+}
+function CountOnly() {
+  const count = useMachineSelector(runtime, (s) => s?.count);
+  countRenders.push(count);
+  return React.createElement("span", null, String(count ?? ""));
+}
+function CustomEq() {
+  const h = useMachine(runtime, (s) => ({ count: s?.count ?? -1 }), (a, b) => a.count === b.count);
+  eqRenders.push({ state: h.state, can: h.can, send: h.send });
+  return React.createElement("span", null, String(h.state.count));
+}
+const container = win.document.createElement("div");
+win.document.body.appendChild(container);
+const rootEl = createRoot(container);
+const settle = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); };
+await act(async () => {
+  rootEl.render(React.createElement(React.Fragment, null, React.createElement(Full), React.createElement(CountOnly), React.createElement(CustomEq)));
+});
+await settle();
+const fullBeforeRename = fullRenders.length;
+const countBeforeRename = countRenders.length;
+const eqBeforeRename = eqRenders.length;
+const firstCan = fullRenders.at(-1).can;
+const firstSend = fullRenders.at(-1).send;
+assert.equal(eqRenders.at(-1).can, firstCan);
+assert.equal(eqRenders.at(-1).send, firstSend);
+assert.equal(firstCan({ type: "inc" }), true);
+await act(async () => { await firstSend({ type: "rename", text: "alpha" }); });
+await settle();
+assert.ok(fullRenders.length > fullBeforeRename);
+assert.equal(countRenders.length, countBeforeRename);
+assert.equal(eqRenders.length, eqBeforeRename);
+assert.equal(fullRenders.at(-1).can, firstCan);
+assert.equal(fullRenders.at(-1).send, firstSend);
+await act(async () => { await firstSend({ type: "inc" }); });
+await settle();
+assert.equal(countRenders.at(-1), 1);
+assert.equal(eqRenders.at(-1).state.count, 1);
+assert.equal(fullRenders.at(-1).can, firstCan);
+assert.equal(fullRenders.at(-1).send, firstSend);
+await act(async () => { await firstSend({ type: "inc" }); await firstSend({ type: "inc" }); });
+await settle();
+assert.equal(firstCan({ type: "inc" }), false);
+assert.equal(fullRenders.at(-1).canInc, false);
+await act(async () => { rootEl.unmount(); });
+await runtime.dispose();
+await win.close();
+`], root);
+    assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+  });
+
+  test("spec ci precompute-simulations balances shards by LPT weight, supports --weights and --list, and rejects malformed weights", async () => {
+    const specFor = (rules: number) => [
+      "# Model",
+      "## Story: Step",
+      ...Array.from({ length: rules }, (_, i) => `### Rule ${i + 1}\n\`\`\`quint\npure def rule${i}(n: int): bool = n >= ${i}\n\`\`\``),
+    ].join("\n\n");
+    const root = scratch({
+      "package.json": JSON.stringify({ name: "sharded", private: true, type: "module" }),
+      "spec/a.md": specFor(5),
+      "spec/b.md": specFor(3),
+      "spec/c.md": specFor(2),
+      "spec/d.md": specFor(1),
+      "spec/e.md": specFor(1),
+      "weights.json": JSON.stringify({ a: 90, b: 40, c: 35, d: 20, e: 15 }),
+      "bad-weights.json": JSON.stringify({ a: -1 }),
+    });
+    const cli = path.join(project, "packages/vibestack/src/spec.ts");
+    const listShard = async (shard: number, shards: number, extra: string[] = []) => {
+      const res = await exec(process.execPath, [cli, "ci", "precompute-simulations", "--shard", String(shard), "--shards", String(shards), "--list", ...extra], root);
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      return JSON.parse(res.stdout) as { shard: number; shards: number; totalSpecs: number; estimatedWeight: number; modules: string[] };
+    };
+    const [d1, d2, d3] = await Promise.all([listShard(1, 3), listShard(2, 3), listShard(3, 3)]);
+    assert.deepEqual([d1.totalSpecs, d2.totalSpecs, d3.totalSpecs], [5, 5, 5]);
+    assert.deepEqual([...d1.modules, ...d2.modules, ...d3.modules].sort(), ["a", "b", "c", "d", "e"]);
+    const [w1, w2] = await Promise.all([listShard(1, 2, ["--weights", "weights.json"]), listShard(2, 2, ["--weights", "weights.json"])]);
+    assert.deepEqual(w1.modules, ["a", "e"]);
+    assert.equal(w1.estimatedWeight, 105);
+    assert.deepEqual(w2.modules, ["b", "c", "d"]);
+    assert.equal(w2.estimatedWeight, 95);
+    const bad = await exec(process.execPath, [cli, "ci", "precompute-simulations", "--shard", "1", "--shards", "2", "--list", "--weights", "bad-weights.json"], root);
+    assert.notEqual(bad.status, 0);
+    assert.match(bad.stderr + bad.stdout, /positive finite number/);
+  });
+
+  test("tokenize and test rules inspect .tsx files containing JSX text apostrophes and parentheses", async () => {
+    const { tokenize } = await import("../packages/vibestack/src/util.ts");
+    const { tests } = await import("../packages/vibestack/src/testing/check.ts");
+    const tsx = [
+      'import { it } from "vitest";',
+      'import { step } from "../gen/door.ts";',
+      'it("renders copy", () => { void step; return <div>don\'t (click)</div>; });',
+      "",
+    ].join("\n");
+    assert.ok(tokenize(tsx, "test/ui.browser.test.tsx"), "JSX text apostrophes and parentheses must still tokenize");
+    const root = fixtures(["door"], (f) => Object.assign(f, {
+      "package.json": JSON.stringify({ name: "jsx-check", private: true, type: "module", scripts: { test: "true" } }),
+      "test/ui.browser.test.tsx": tsx,
+    }));
+    const results = await tests(root, "", readSpecs(root), (_key, runTests) => runTests(), "normal", true, false);
+    assert.ok(results.some(([ok, , summary]) => !ok && /1 tests cite no story or rule/.test(summary)), JSON.stringify(results));
+    assert.ok(results.some(([ok, , summary]) => !ok && /1 tests touch only generated code/.test(summary)), JSON.stringify(results));
+  });
+
+  test("spec watch tolerates a transiently malformed package.json and recovers once valid", async () => {
+    const root = fixtures(["door"], (f) => Object.assign(f, {
+      "package.json": JSON.stringify({ name: "watch-resilient", private: true, type: "module", scripts: { test: "true" } }),
+    }));
+    const manifestPath = path.join(root, "package.json");
+    const original = fs.readFileSync(manifestPath, "utf8");
+    const watch = watching(root);
+    try {
+      await watch.waitFor(() => watch.checks() === 1);
+      fs.writeFileSync(manifestPath, "{");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await watch.waitFor(() => true);
+      fs.writeFileSync(manifestPath, original);
+      fs.appendFileSync(path.join(root, "spec/door.md"), "\nWatch recovery note.\n");
+      await watch.waitFor(() => watch.checks() >= 2);
+    } finally {
+      await watch.stop();
+    }
   });
 
   test("init gives a project the repository's guard on what the tools write", () => {

@@ -842,13 +842,18 @@ async function watch(root: string) {
   const inode = (dir: string) => { try { return fs.statSync(path.join(root, dir)).ino; } catch { return undefined; } };
   const read = (dir: string) => { try { return fs.readdirSync(path.join(root, dir || "."), { withFileTypes: true }); } catch { return []; } };
   const containers = ["apps", "packages"];
+  const dependencies = (dir: string) => { try { return workspacePackages(path.join(root, dir)); } catch { return []; } };
   const attach = () => {
     const areas = read("spec").filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-    const packages = [...containers, ...areas.flatMap((area) => specOwnerPaths(root, area))];
+    let packages: string[];
+    let owners: string[];
+    try {
+      packages = [...containers, ...areas.flatMap((area) => specOwnerPaths(root, area))];
+      owners = codeDirs(root);
+    } catch { return; }
     const own = (dir: string) => read(dir).filter((e) => e.isDirectory() && !UNREAD.test(e.name) && e.name !== "gen" && !(dir === "" && containers.includes(e.name))
       && !fs.existsSync(path.join(root, dir, e.name, "package.json"))).map((e): [string, boolean] => [`${dir}${e.name}`, true]);
-    const owners = codeDirs(root);
-    const depended = owners.flatMap((dir) => workspacePackages(path.join(root, dir)).map(({ directory }) => path.relative(root, directory)))
+    const depended = owners.flatMap((dir) => dependencies(dir).map(({ directory }) => path.relative(root, directory)))
       .filter((dir) => dir && !dir.startsWith("..") && !path.isAbsolute(dir) && !owners.includes(`${dir}/`)).map((dir): [string, boolean] => [dir, true]);
     const dirs = new Map([...packages.map((dir): [string, boolean] => [dir, false]), ...owners.flatMap((dir): [string, boolean][] => [[dir || ".", false], ...own(dir)]), ...depended]);
     for (const dir of new Set([...dirs.keys(), ...watched.keys()])) {

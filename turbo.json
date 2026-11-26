@@ -541,9 +541,7 @@
       "dependsOn": [
         "^build"
       ],
-      "outputs": [
-        ".vibe/declarations/**"
-      ]
+      "outputs": []
     },
     "@repo/design-system#build": {
       "dependsOn": [

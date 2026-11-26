@@ -111,13 +111,15 @@ control is offered exactly when its event is. It keeps in `useState` only
 what the spec does not own, such as an open menu or a draft in a text box.
 
 In a package that depends on `react`, `gen/<name>.react.ts` exports, for each
-state machine, `useMachine(runtime)` over a `ManagedRuntime` that provides
-`Machine`. It returns `{ state, cause, can(event[, by]), send(event[, by]) }`:
-`state` is undefined until the machine has published one, `cause` is what
-stopped it (such as a `stored` layer that could not read its key), `can` is
-`enabled` in that state, and `send` resolves with the `Exit` of
-`Machine.send`. Offer a control exactly when `can` holds; never hand-write a
-hook over `changes`.
+state machine, `useMachine(runtime)` and `useMachine(runtime, select, equals?)`
+(plus `useMachineSelector(runtime, select, equals?)`) over a `ManagedRuntime`
+that provides `Machine`. `useMachine` returns `{ state, cause, can(event[, by]), send(event[, by]) }`:
+`state` is undefined until the machine has published one (or the selected slice
+when `select` is given, re-rendering only when `equals` says it changed),
+`cause` is what stopped it (such as a `stored` layer that could not read its
+key), `can` and `send` are cached per runtime (`can` checks `enabled`, and
+`send` resolves with the `Exit` of `Machine.send`). Offer a control exactly
+when `can` holds; never hand-write a hook over `changes`.
 
 Style with Tailwind utilities on the project's tokens, compose shadcn/ui
 components before writing one, and follow the

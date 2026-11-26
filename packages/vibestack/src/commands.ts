@@ -165,12 +165,70 @@ function readFlag(args: string[], flag: string): string | undefined {
   return undefined;
 }
 
+function parseShardWeights(file: string): Record<string, number> {
+  const raw: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error(`${file}: shard weights must be a JSON object mapping spec names or paths to positive numbers`);
+  }
+  const weights: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      throw new Error(`${file}: weight for "${key}" must be a positive finite number`);
+    }
+    weights[key] = value;
+  }
+  return weights;
+}
+
+function specShardWeight(spec: Spec, weights?: Readonly<Record<string, number>>): number {
+  const configured = weights?.[spec.name] ?? weights?.[spec.file];
+  if (configured !== undefined) return configured;
+  return Math.max(1, spec.rules.length * 2 + spec.imports.length + Math.ceil(spec.qnt.split("\n").length / 40));
+}
+
+function assignSimulationShard(
+  specs: readonly Spec[],
+  shard: number,
+  shards: number,
+  weights?: Readonly<Record<string, number>>,
+): { readonly modules: string[]; readonly estimatedWeight: number } {
+  const bins = Array.from({ length: shards }, () => ({ weight: 0, specs: [] as Spec[] }));
+  const ordered = [...specs].sort(
+    (a, b) => specShardWeight(b, weights) - specShardWeight(a, weights)
+      || a.file.localeCompare(b.file, "en")
+      || a.name.localeCompare(b.name, "en"),
+  );
+  for (const spec of ordered) {
+    let target = bins[0]!;
+    for (let i = 1; i < bins.length; i++) {
+      if (bins[i]!.weight < target.weight) target = bins[i]!;
+    }
+    target.weight += specShardWeight(spec, weights);
+    target.specs.push(spec);
+  }
+  const chosen = bins[shard - 1]!;
+  return {
+    modules: chosen.specs.map(({ name }) => name),
+    estimatedWeight: Number(chosen.weight.toFixed(2)),
+  };
+}
+
 async function runCiPrecomputeSimulations(root: string, args: string[], prepareSimulationReceipts: SimulationPrepFn): Promise<number> {
   const shard = Number(readFlag(args, "--shard") ?? process.env.SHARD ?? "1");
   const shards = Number(readFlag(args, "--shards") ?? process.env.SHARDS ?? "1");
   if (!Number.isInteger(shard) || !Number.isInteger(shards) || shard < 1 || shards < 1 || shard > shards) {
     throw new Error(`invalid shard parameters: shard=${shard}, shards=${shards}`);
   }
+  const weightsArg = readFlag(args, "--weights");
+  const weights = weightsArg ? parseShardWeights(path.resolve(root, weightsArg)) : undefined;
+  const listOnly = args.includes("--list");
+  const specs = readSpecs(root);
+  const assignment = assignSimulationShard(specs, shard, shards, weights);
+  if (listOnly) {
+    console.log(JSON.stringify({ shard, shards, totalSpecs: specs.length, estimatedWeight: assignment.estimatedWeight, modules: assignment.modules }));
+    return 0;
+  }
+
   const outParent = path.resolve(root, readFlag(args, "--out") ?? process.env.RUNNER_TEMP ?? os.tmpdir());
   const githubOutput = readFlag(args, "--github-output") ?? process.env.GITHUB_OUTPUT;
   const cacheDir = cacheDirectory(root);
@@ -186,10 +244,7 @@ async function runCiPrecomputeSimulations(root: string, args: string[], prepareS
     try { restored.set(name, fileDigest(path.join(cacheDir, name))); } catch { /* ignore unreadable */ }
   }
 
-  const specs = readSpecs(root);
-  const inShard = ({ file }: { file: string }) =>
-    parseInt(createHash("sha256").update(file).digest("hex").slice(0, 8), 16) % shards === shard - 1;
-  const names = specs.filter(inShard).map(({ name }) => name);
+  const names = assignment.modules;
   fs.mkdirSync(outParent, { recursive: true });
   const { results, seedDirectory, partialDirectory } = await prepareSimulationReceipts(root, specs, names, outParent);
   const checkpoint = seedDirectory ?? partialDirectory;

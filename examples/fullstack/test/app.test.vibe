@@ -95,24 +95,26 @@ it.live("change the list over HTTP, and keep it across a restart", () => effect 
         // spec/server.md, "The server holds the list, its version and a log of every request it answered"
         const before = try store.get()
         const borrowed = try store.get()
-        borrowed.version = -1
-        Object.assign(borrowed.log[0]!.op, { title: "borrowed read" })
+        try Effect.try(() => {
+          assert.throws(() => { borrowed.version = -1 }, TypeError)
+          assert.throws(() => { Object.assign(borrowed.log[0]!.op, { title: "borrowed read" }) }, TypeError)
+        })
         try Stream.runHead(Stream.tap(store.changes, (state) => sync(() => {
-          state.version = -2
-          state.todos[0]!.title = "borrowed notification"
+          assert.throws(() => { state.version = -2 }, TypeError)
+          assert.throws(() => { state.todos[0]!.title = "borrowed notification" }, TypeError)
         })))
         const rejected = try Effect.flip(store.send({ type: "request", client: "ann", seq: 1, op: create("ann-1", "milk") }))
-        rejected.state.version = -3
+        try Effect.try(() => assert.throws(() => { rejected.state.version = -3 }, TypeError))
         const unchanged = try store.get()
 
         const typed: Event = { type: "request", client: "typed", seq: 1, op: create("typed-1", "typed") }
         const accepted = try store.send(typed)
         Object.assign(typed.op, { title: "borrowed input" })
-        accepted.todos.at(-1)!.title = "borrowed result"
+        try Effect.try(() => assert.throws(() => { accepted.todos.at(-1)!.title = "borrowed result" }, TypeError))
         const outsideInput = request("outside", 1, create("outside-1", "outside"))
         const received = try store.receive(outsideInput)
         Object.assign(outsideInput.op, { title: "borrowed outside input" })
-        Object.assign(received.log.at(-1)!.op, { title: "borrowed outside result" })
+        try Effect.try(() => assert.throws(() => { Object.assign(received.log.at(-1)!.op, { title: "borrowed outside result" }) }, TypeError))
         saved = try store.get()
         try Effect.try(() => assert.deepStrictEqual(
           { unchanged, titles: saved.todos.slice(-2).map((t) => t.title), logged: saved.log.slice(-2).map((r) => r.op) },
@@ -218,7 +220,7 @@ it.live("a lone user's queued edits reach the server in order, and none is refus
   provide Served {
     const a = try openTab("a")
     const borrowed = try a.get()
-    borrowed.online = false
+    try Effect.try(() => assert.throws(() => { borrowed.online = false }, TypeError))
     const retained = try a.get()
     try Effect.try(() => assert.isTrue(retained.online))
     try a.dispatch({ type: "goOffline" })
