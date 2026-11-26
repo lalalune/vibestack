@@ -5,6 +5,7 @@ import path from "node:path";
 import { dafnyVersion } from "./cache.ts";
 import { evaluatorIdentity } from "./installed.ts";
 import { cachedDafnyDir, exec, findBin, findDafny, onPath } from "./run.ts";
+import { GENERATED_AGENT_DIRECTORIES } from "./skill-links.ts";
 
 export interface DoctorCheck {
   name: string;
@@ -22,25 +23,56 @@ export interface DoctorReport {
 }
 
 const DAFNY_VERSION = "4.11.0";
+const DAFNY_DOWNLOAD_TIMEOUT_MS = 120_000;
 const MIN_NODE = 26;
-const AGENT_DIRS = [".claude", ".codex", ".cursor", ".droid", ".factory", ".gemini", ".grok", ".grokbot", ".muse", ".t3"];
 
-function dafnyReleaseAsset(): string {
+interface DafnyAsset {
+  readonly asset: string;
+  readonly sha256: string;
+}
+
+function dafnyReleaseAsset(): DafnyAsset {
   const key = `${process.platform}:${process.arch}`;
-  const assets: Record<string, string> = {
-    "darwin:arm64": `dafny-${DAFNY_VERSION}-arm64-osx-14.zip`,
-    "darwin:x64": `dafny-${DAFNY_VERSION}-x64-osx-13.zip`,
-    "linux:x64": `dafny-${DAFNY_VERSION}-x64-ubuntu-22.04.zip`,
-    "linux:arm64": `dafny-${DAFNY_VERSION}-arm64-ubuntu-22.04.zip`,
-    "win32:x64": `dafny-${DAFNY_VERSION}-x64-windows-2022.zip`,
+  const assets: Record<string, DafnyAsset> = {
+    "darwin:arm64": {
+      asset: `dafny-${DAFNY_VERSION}-arm64-macos-13.zip`,
+      sha256: "c90c75e7d5db9c6ccbb7127840dfe43f0ac938b039a7ebed146d8ead383a572f",
+    },
+    "darwin:x64": {
+      asset: `dafny-${DAFNY_VERSION}-x64-macos-13.zip`,
+      sha256: "5fc0de946c5b2fad33f16bd22a5b06f4fd0dfa7f6d770284237e3f1f3ca9f73d",
+    },
+    "linux:x64": {
+      asset: `dafny-${DAFNY_VERSION}-x64-ubuntu-22.04.zip`,
+      sha256: "a46a9ff7cdd720f7955854c78e95df13f4cfe6b80691b05f8654fe19e8267179",
+    },
+    "win32:x64": {
+      asset: `dafny-${DAFNY_VERSION}-x64-windows-2022.zip`,
+      sha256: "3653f05a111ca21e234709ea7b25ce96083fd6c6f10484256ba54110dbc0654d",
+    },
   };
-  const asset = assets[key];
-  if (!asset) throw new Error(`no official Dafny ${DAFNY_VERSION} release asset for ${key}`);
-  return asset;
+  const entry = assets[key];
+  if (!entry) throw new Error(`no official Dafny ${DAFNY_VERSION} release asset for ${key}`);
+  return entry;
+}
+
+function psSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function makeExecutable(dir: string, binName: string): void {
+  if (process.platform === "win32") return;
+  fs.chmodSync(path.join(dir, binName), 0o755);
+  const z3Dir = path.join(dir, "z3", "bin");
+  if (!fs.existsSync(z3Dir)) return;
+  for (const entry of fs.readdirSync(z3Dir)) {
+    const file = path.join(z3Dir, entry);
+    if (fs.statSync(file).isFile()) fs.chmodSync(file, 0o755);
+  }
 }
 
 export async function installDafny(): Promise<string> {
-  const asset = dafnyReleaseAsset();
+  const { asset, sha256: expectedHash } = dafnyReleaseAsset();
   const url = `https://github.com/dafny-lang/dafny/releases/download/v${DAFNY_VERSION}/${asset}`;
   const targetDir = cachedDafnyDir();
   const binName = process.platform === "win32" ? "dafny.exe" : "dafny";
@@ -48,40 +80,57 @@ export async function installDafny(): Promise<string> {
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), "vibestack-dafny-"));
   const archive = path.join(staging, asset);
   const extracted = path.join(staging, "out");
+  let stagedTarget: string | undefined;
+  let backupDir: string | undefined;
   try {
-    const response = await fetch(url, { redirect: "follow" });
+    const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(DAFNY_DOWNLOAD_TIMEOUT_MS) });
     if (!response.ok) throw new Error(`failed to download ${url}: HTTP ${response.status}`);
     const bytes = Buffer.from(await response.arrayBuffer());
+    const actualHash = createHash("sha256").update(bytes).digest("hex");
+    if (actualHash !== expectedHash) {
+      throw new Error(`checksum mismatch for ${asset}: expected ${expectedHash}, got ${actualHash}`);
+    }
     fs.writeFileSync(archive, bytes);
     fs.mkdirSync(extracted, { recursive: true });
     const unzip = process.platform === "win32"
-      ? await exec("powershell", ["-NoProfile", "-Command", `Expand-Archive -Path '${archive}' -DestinationPath '${extracted}' -Force`], staging)
+      ? await exec("powershell", ["-NoProfile", "-Command", `Expand-Archive -Path ${psSingleQuote(archive)} -DestinationPath ${psSingleQuote(extracted)} -Force`], staging)
       : await exec("unzip", ["-q", archive, "-d", extracted], staging);
     if (unzip.status !== 0 || unzip.stopped) {
       throw new Error(`failed to extract ${asset}: ${unzip.stderr || unzip.stdout || unzip.stopped}`);
     }
     const inner = path.join(extracted, "dafny");
     const sourceDir = fs.existsSync(path.join(inner, binName)) ? inner : extracted;
-    if (!fs.existsSync(path.join(sourceDir, binName))) {
+    const stagedBin = path.join(sourceDir, binName);
+    if (!fs.existsSync(stagedBin)) {
       throw new Error(`extracted ${asset} did not contain ${binName}`);
     }
-    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
-    fs.rmSync(targetDir, { recursive: true, force: true });
-    fs.cpSync(sourceDir, targetDir, { recursive: true });
-    if (process.platform !== "win32") {
-      fs.chmodSync(targetBin, 0o755);
-      const z3Dir = path.join(targetDir, "z3", "bin");
-      if (fs.existsSync(z3Dir)) {
-        for (const entry of fs.readdirSync(z3Dir)) {
-          const file = path.join(z3Dir, entry);
-          if (fs.statSync(file).isFile()) fs.chmodSync(file, 0o755);
-        }
-      }
+    makeExecutable(sourceDir, binName);
+    const verify = await exec(stagedBin, ["--version"], sourceDir);
+    if (verify.status !== 0) throw new Error(`extracted Dafny failed to run: ${verify.stderr || verify.stdout}`);
+
+    const parent = path.dirname(targetDir);
+    fs.mkdirSync(parent, { recursive: true });
+    stagedTarget = fs.mkdtempSync(path.join(parent, ".dafny-install-"));
+    fs.cpSync(sourceDir, stagedTarget, { recursive: true });
+    makeExecutable(stagedTarget, binName);
+    if (fs.existsSync(targetDir)) {
+      backupDir = `${targetDir}.bak-${process.pid}-${Date.now()}`;
+      fs.renameSync(targetDir, backupDir);
     }
-    const verify = await exec(targetBin, ["--version"], targetDir);
-    if (verify.status !== 0) throw new Error(`installed Dafny failed to run: ${verify.stderr || verify.stdout}`);
+    try {
+      fs.renameSync(stagedTarget, targetDir);
+      stagedTarget = undefined;
+    } catch (error) {
+      if (backupDir && fs.existsSync(backupDir) && !fs.existsSync(targetDir)) {
+        fs.renameSync(backupDir, targetDir);
+        backupDir = undefined;
+      }
+      throw error;
+    }
     return targetBin;
   } finally {
+    if (stagedTarget) fs.rmSync(stagedTarget, { recursive: true, force: true });
+    if (backupDir) fs.rmSync(backupDir, { recursive: true, force: true });
     fs.rmSync(staging, { recursive: true, force: true });
   }
 }
@@ -112,9 +161,18 @@ async function checkDafny(install: boolean): Promise<DoctorCheck> {
   }
   const checked = await dafnyVersion();
   if (checked.problem) {
-    if (install && !dafny.startsWith(cachedDafnyDir())) {
+    const cachedDir = cachedDafnyDir();
+    if (install && !dafny.startsWith(cachedDir + path.sep)) {
       try {
         const installed = await installDafny();
+        const active = findDafny();
+        if (active && active !== installed) {
+          return {
+            name: "dafny",
+            status: "warn",
+            detail: `installed Dafny ${DAFNY_VERSION} at ${installed}, but ${active} on PATH takes precedence; prepend ${cachedDir} to PATH or remove the older binary`,
+          };
+        }
         return { name: "dafny", status: "ok", detail: `installed Dafny ${DAFNY_VERSION} at ${installed}` };
       } catch (error) {
         return { name: "dafny", status: "fail", detail: `install failed: ${(error as Error).message}` };
@@ -152,7 +210,7 @@ function checkSkillLinks(root: string): DoctorCheck {
     return { name: "skills", status: "warn", detail: ".agents/skills not present (run `vibestack init`)" };
   }
   const missing: string[] = [];
-  for (const agent of AGENT_DIRS) {
+  for (const agent of GENERATED_AGENT_DIRECTORIES) {
     const dest = path.join(root, agent, "skills");
     if (!fs.lstatSync(dest, { throwIfNoEntry: false })) missing.push(`${agent}/skills`);
   }
@@ -163,7 +221,7 @@ function checkSkillLinks(root: string): DoctorCheck {
   if (missing.length) {
     return { name: "skills", status: "warn", detail: `missing links: ${missing.join(", ")} (run \`vibestack link\`)` };
   }
-  return { name: "skills", status: "ok", detail: `all ${AGENT_DIRS.length} agent skill links present` };
+  return { name: "skills", status: "ok", detail: `all ${GENERATED_AGENT_DIRECTORIES.length} agent skill links present` };
 }
 
 function checkManifest(root: string): DoctorCheck {

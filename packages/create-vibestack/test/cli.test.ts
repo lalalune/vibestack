@@ -43,6 +43,15 @@ describe("create-vibestack CLI", () => {
       devDependencies: { vibestack: "catalog:" },
     });
     expect(workspace).toContain("vibestack: 0.2.0");
+    expect(workspace).toContain("effect: 4.1.1");
+    expect(workspace).toContain("vibelang: 0.0.13");
+    expect(readJson(path.join(target, "apps/app/package.json"))).toMatchObject({
+      dependencies: { effect: "catalog:", "vibelang-runtime": "catalog:" },
+      devDependencies: { "@effect/vitest": "catalog:", "@antithesishq/bombadil": "catalog:", vibelang: "catalog:", "vibelang-vite": "catalog:" },
+    });
+    expect(readJson(path.join(target, "packages/ui/package.json"))).toMatchObject({
+      devDependencies: { vibelang: "catalog:" },
+    });
     expect(readme).toContain("# my-cool-app");
     expect(readme).not.toContain("my-vibestack-app");
     expect(fs.existsSync(path.join(target, ".gitignore"))).toBe(true);

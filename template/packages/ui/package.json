@@ -46,7 +46,7 @@
     "storybook": "catalog:",
     "tailwindcss": "catalog:",
     "typescript": "catalog:",
-    "vibelang": "0.0.13",
+    "vibelang": "catalog:",
     "vibestack": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"

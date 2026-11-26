@@ -3,6 +3,7 @@
 // small specs in selftest/fixtures/, breaks one thing, and asserts which stage of `check` fails.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import { request as httpRequest } from "node:http";
@@ -4353,11 +4354,12 @@ assert.deepEqual(outcome, ["Rejected", 1, 2]);`], root);
     const root = scratch({
       "package.json": manifest,
       "tsconfig.json": PACKAGE["tsconfig.json"],
-      "spec/board.md": ruleSpec(`type State = { count: int, note: str }
-pure val initial: State = { count: 0, note: "" }
+      "spec/board.md": ruleSpec(`type State = { count: int, note: str, tags: List[str] }
+pure val initial: State = { count: 0, note: "", tags: List() }
 pure def canInc(s: State): bool = s.count < 3
 pure def inc(s: State): State = { ...s, count: s.count + 1 }
 pure def rename(s: State, text: str): State = { ...s, note: text }
+pure def tag(s: State, items: List[str]): State = { ...s, tags: items }
 pure def touch(s: State): State = s
 pure def alwaysValid(s: State): bool = 0 <= s.count and s.count <= 3`),
       "src/hooks.ts": `import type { ManagedRuntime } from "effect";
@@ -4412,9 +4414,9 @@ await Effect.runPromise(Effect.gen(function*() {
   const touched = yield* m.send({ type: "touch" });
   assert.equal(touched, s1);
   assert.equal(sets, 1);
-  backing.set("board", JSON.stringify({ count: 2, note: "ext" }));
+  backing.set("board", JSON.stringify({ count: 2, note: "ext", tags: [] }));
   const g3 = yield* m.get();
-  assert.deepEqual(g3, { count: 2, note: "ext" });
+  assert.deepEqual(g3, { count: 2, note: "ext", tags: [] });
   assert.equal(Object.isFrozen(g3), true);
   const afterMiss = parses;
   assert.ok(afterMiss > beforeReads);
@@ -4423,9 +4425,58 @@ await Effect.runPromise(Effect.gen(function*() {
   assert.equal(parses, afterMiss);
   backing.delete("board");
   const g5 = yield* m.get();
-  assert.deepEqual(g5, { count: 0, note: "" });
+  assert.deepEqual(g5, { count: 0, note: "", tags: [] });
   assert.equal(Object.isFrozen(g5), true);
+  const setsBeforeEmptyTouch = sets;
+  yield* m.send({ type: "touch" });
+  assert.equal(sets, setsBeforeEmptyTouch + 1);
+  assert.ok(backing.has("board"));
 }).pipe(Effect.provide(layer)));
+// Shallow-frozen start and event payloads still deep-clone and freeze nested mutable arrays; cyclic inputs do not overflow.
+const mutableStartTags = ["a"];
+const shallowStart = Object.freeze({ count: 1, note: "init", tags: mutableStartTags });
+await Effect.runPromise(Effect.gen(function*() {
+  const m = yield* Machine;
+  mutableStartTags.push("mutated-start");
+  const loaded = yield* m.get();
+  assert.deepEqual(loaded.tags, ["a"]);
+  assert.equal(Object.isFrozen(loaded.tags), true);
+  const mutableEventTags = ["x"];
+  const shallowEvent = Object.freeze({ type: "tag", items: mutableEventTags });
+  const tagged = yield* m.send(shallowEvent);
+  mutableEventTags.push("mutated-event");
+  assert.deepEqual(tagged.tags, ["x"]);
+  assert.equal(Object.isFrozen(tagged.tags), true);
+  const cyclic = { type: "touch" };
+  cyclic.self = cyclic;
+  const touchedCyclic = yield* m.send(cyclic);
+  assert.deepEqual(touchedCyclic.tags, ["x"]);
+}).pipe(Effect.provide(machine(shallowStart))));
+// LRU cache cap (128) evicts oldest keys without breaking lookup or failing on >128 distinct keys on one store.
+const lruBacking = new Map();
+const lruStore = KeyValueStore.makeStringOnly({
+  get: (key) => Effect.sync(() => lruBacking.get(key)),
+  set: (key, value) => Effect.sync(() => { lruBacking.set(key, value); }),
+  remove: (key) => Effect.sync(() => { lruBacking.delete(key); }),
+  clear: Effect.sync(() => { lruBacking.clear(); }),
+  size: Effect.sync(() => lruBacking.size),
+});
+const lruLayer = Layer.succeed(KeyValueStore.KeyValueStore, lruStore);
+for (let i = 0; i < 140; i++) {
+  lruBacking.set("k" + i, JSON.stringify({ count: 1, note: "n" + i, tags: [] }));
+  await Effect.runPromise(Effect.gen(function*() {
+    const m = yield* Machine;
+    const s = yield* m.get();
+    assert.equal(s.note, "n" + i);
+  }).pipe(Effect.provide(stored("k" + i).pipe(Layer.provide(lruLayer)))));
+}
+const parsesBeforeEvicted = parses;
+await Effect.runPromise(Effect.gen(function*() {
+  const m = yield* Machine;
+  const s = yield* m.get();
+  assert.equal(s.note, "n0");
+}).pipe(Effect.provide(stored("k0").pipe(Layer.provide(lruLayer)))));
+assert.ok(parses > parsesBeforeEvicted, "oldest key beyond 128-entry LRU cap was evicted");
 JSON.parse = realParse;
 
 const win = new Window();
@@ -4488,6 +4539,20 @@ await settle();
 assert.equal(firstCan({ type: "inc" }), false);
 assert.equal(fullRenders.at(-1).canInc, false);
 await act(async () => { rootEl.unmount(); });
+// Out-of-band update while unmounted does not flash stale snapshot on remount.
+await runtime.runPromise(Machine.use((m) => m.send({ type: "rename", text: "after-unmount" })));
+const remountNotes = [];
+function Remounted() {
+  const { state } = useMachine(runtime);
+  remountNotes.push(state?.note);
+  return React.createElement("span", null, state?.note ?? "");
+}
+const rootEl2 = createRoot(container);
+await act(async () => { rootEl2.render(React.createElement(Remounted)); });
+await settle();
+assert.equal(remountNotes[0], undefined, "unmounting last subscriber clears stale seen snapshot");
+assert.equal(remountNotes.at(-1), "after-unmount");
+await act(async () => { rootEl2.unmount(); });
 await runtime.dispose();
 await win.close();
 `], root);
@@ -5474,9 +5539,41 @@ test("vibestack.json spec.exclude, link, upgrade, doctor, conformance and explor
   assert.deepEqual(specs.map((s) => s.file), ["spec/index.md"], "excluded directories are skipped and prose links into them are allowed");
 
   fs.writeFileSync(path.join(brownfield, ".agents/skills/sync/SKILL.md"), "Custom user edit\n");
+  fs.mkdirSync(path.join(brownfield, ".agents/skills/my-custom"), { recursive: true });
+  fs.writeFileSync(path.join(brownfield, ".agents/skills/my-custom/SKILL.md"), "# User custom skill\n");
+  fs.mkdirSync(path.join(brownfield, "node_modules"), { recursive: true });
+  fs.symlinkSync(path.join(project, "packages/vibestack"), path.join(brownfield, "node_modules/vibestack"), "dir");
+  const obsoleteRel = ".agents/skills/obsolete-skill/SKILL.md";
+  const obsoletePath = path.join(brownfield, obsoleteRel);
+  const obsoleteBody = "# Obsolete upstream skill\n";
+  fs.mkdirSync(path.dirname(obsoletePath), { recursive: true });
+  fs.writeFileSync(obsoletePath, obsoleteBody);
+  const manifestPath = path.join(brownfield, ".agents/.vibestack-manifest.json");
+  const manifestBefore = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { version: string; files: Record<string, string> };
+  manifestBefore.files[obsoleteRel] = createHash("sha256").update(obsoleteBody).digest("hex");
+  fs.writeFileSync(manifestPath, JSON.stringify(manifestBefore, null, 2) + "\n");
   const upgradeRes = await runCli(cli, brownfield, "upgrade", "--dry-run", "--from", path.join(project, "packages/vibestack"));
   assert.equal(upgradeRes.status, 0, upgradeRes.stdout + upgradeRes.stderr);
   assert.equal(read(".agents/skills/sync/SKILL.md", brownfield), "Custom user edit\n");
+  assert.match(upgradeRes.stdout, /removed \(1\):.*\.agents\/skills\/obsolete-skill\/SKILL\.md/, upgradeRes.stdout);
+  assert.doesNotMatch(upgradeRes.stdout, /my-custom/, "consumer custom skills are never treated as managed upstream assets");
+
+  // Repeat upgrade on a catalog workspace preserves "catalog:" in package.json; non-catalog --from rewrites manifests instead of writing file: into catalog.
+  const catalogWs = scratch({
+    "package.json": JSON.stringify({ name: "ws-app", private: true, type: "module", devDependencies: { vibestack: "catalog:" } }, null, 2) + "\n",
+    "pnpm-workspace.yaml": "packages:\n  - apps/*\n\ncatalog:\n  vibestack: ^0.2.0\n",
+    "apps/web/package.json": JSON.stringify({ name: "@ws/web", private: true, devDependencies: { vibestack: "catalog:" } }, null, 2) + "\n",
+  });
+  fs.mkdirSync(path.join(catalogWs, "node_modules"), { recursive: true });
+  fs.symlinkSync(path.join(project, "packages/vibestack"), path.join(catalogWs, "node_modules/vibestack"), "dir");
+  const repeatUpgrade = await runCli(cli, catalogWs, "upgrade", "^0.2.0", "--dry-run");
+  assert.equal(repeatUpgrade.status, 0, repeatUpgrade.stdout + repeatUpgrade.stderr);
+  assert.doesNotMatch(repeatUpgrade.stdout, /bumped:/, "repeat upgrade at same catalog version does not overwrite catalog: in package.json");
+  assert.equal(JSON.parse(read("package.json", catalogWs)).devDependencies.vibestack, "catalog:");
+  const localUpgrade = await runCli(cli, catalogWs, "upgrade", "--dry-run", "--from", path.join(project, "packages/vibestack"));
+  assert.equal(localUpgrade.status, 0, localUpgrade.stdout + localUpgrade.stderr);
+  assert.match(localUpgrade.stdout, /catalog\.vibestack removed/, localUpgrade.stdout);
+  assert.match(localUpgrade.stdout, /apps\/web\/package\.json devDependencies\.vibestack -> file:/, localUpgrade.stdout);
 
   const doctorRes = await runCli(cli, brownfield, "doctor");
   assert.equal(doctorRes.status, 0, doctorRes.stdout + doctorRes.stderr);
