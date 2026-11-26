@@ -1088,7 +1088,6 @@ export async function entry(root: string, stage: Stage, key: (string | undefined
   return { name, file: cacheFile(root, name), reusable, evaluator };
 }
 const touchedByMemory = new WeakMap<Memory, Set<string>>();
-const USE_TOUCH_MS = 60 * 60 * 1000;
 /** Entries are deleted when unused for a while (see collectGarbage), so a hit says the entry is in use. */
 function use(memory: Memory, name: string) {
   memory.used.add(name);
@@ -1101,11 +1100,8 @@ function use(memory: Memory, name: string) {
   check?.touched.add(file);
   seen.add(file);
   try {
-    const stat = fs.statSync(file, { throwIfNoEntry: false });
-    if (stat && Date.now() - stat.mtimeMs > USE_TOUCH_MS) {
-      const now = new Date();
-      fs.utimesSync(file, now, now);
-    }
+    const now = new Date();
+    fs.utimesSync(file, now, now);
   } catch { /* still a hit */ }
 }
 function projectedEntry(memory: Memory, at: Entry): Entry | undefined {
