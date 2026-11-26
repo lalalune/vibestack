@@ -27,7 +27,7 @@ import { installChromium } from "../packages/vibestack/src/chromium.ts";
 import { hostedCachedFixture, isolatedInstalls } from "./selftests/install.ts";
 import { PACKED, toolShards } from "./selftests/tools.ts";
 import { bigNumberInteger } from "../packages/vibestack/src/gen/types.ts";
-import { canonical, check as conformanceCheck, ConformanceError, departure, replay as replayTrace } from "../packages/vibestack/src/conformance.ts";
+import { canonical, check as conformanceCheck, ConformanceError, departure, planModel, replay as replayTrace } from "../packages/vibestack/src/conformance.ts";
 import { BUILTINS, LIST_HELPERS, OPERATORS } from "../packages/vibestack/src/gen/print.ts";
 import { mirrorGen } from "../packages/vibestack/src/units.ts";
 import { conformance as checkTraces, conformanceFound } from "../packages/vibestack/src/conform.ts";
@@ -480,11 +480,11 @@ export const driver = {
         return { result, kept };
       };
       const passed = await checkDriver(driver);
-      assert.ok(passed.result[0] && passed.result[2].includes("1 walks of seed 1"), passed.result.join("\n"));
+      assert.ok(passed.result[0] && passed.result[2].includes("1 walks of seed 1") && passed.result[2].includes("1/1 transitions accepted, 1/1 refused"), passed.result.join("\n"));
       assert.deepEqual(passed.kept, [true]);
       const stopped = await checkDriver(`${driver}\nprocess.on("exit", () => process.kill(process.pid, "SIGKILL"));`);
       assert.equal(stopped.result[0], false, stopped.result.join("\n"));
-      assert.match(stopped.result[3] ?? "", /did not finish: node was killed by SIGKILL[\s\S]*"summary":"1 walks of seed 1"/);
+      assert.match(stopped.result[3] ?? "", /did not finish: node was killed by SIGKILL[\s\S]*"summary":"1 model path, 1 walks of seed 1 \(1\/1 transitions accepted, 1\/1 refused\)"/);
       assert.deepEqual(stopped.kept, [false]);
       const disagreement = await checkDriver(driver.replace("return state;", "return state + 1;"));
       assert.equal(disagreement.result[0], false, disagreement.result.join("\n"));
@@ -508,6 +508,88 @@ export const driver = {
     const quietSpec = parseSpec(quiet, "spec/quiet.md"), quietModel = await gen(quiet, quietSpec);
     await conformanceCheck(await import(path.join(quiet, "gen/quiet.ts")), conformanceFound(quietModel, quietSpec, [[{ state: 0 }, { event: { type: "stay" }, state: 0 }]], []),
       { reset() {}, dispatch: () => "accepted", observe: () => 0 }, { walks: 1, steps: 2 });
+  });
+
+  test("model-based conformance paths cover non-sometimes transitions, refusals, and receive probes even with walks: 0", async () => {
+    const root = oneRule("workflow", "Lifecycle", `type Stage = Draft | Pending | OnHold
+type Job = { stage: Stage, tag: int }
+pure val initial: Job = { stage: Draft, tag: 0 }
+pure def canSubmit(j: Job): bool = j.stage == Draft
+pure def submit(j: Job): Job = { ...j, stage: Pending }
+pure def canHold(j: Job): bool = j.stage == Pending
+pure def hold(j: Job): Job = { ...j, stage: OnHold }
+pure def canRelease(j: Job, code: int): bool = j.stage == OnHold and code > 0
+pure def release(j: Job, code: int): Job = { stage: Pending, tag: code }
+pure def sometimesSubmitted(j: Job): bool = j.stage == Pending`);
+    const spec = parseSpec(root, "spec/workflow.md");
+    const model = await gen(root, spec);
+    const domain = await import(path.join(root, "gen/workflow.ts"));
+    const filler = Array.from({ length: 120 }, () => [{ state: domain.initial }, { event: { type: "submit" }, state: { stage: "Pending", tag: 0 } }]);
+    const deepTrace = [
+      { state: domain.initial },
+      { event: { type: "submit" }, state: { stage: "Pending", tag: 0 } },
+      { event: { type: "hold" }, state: { stage: "OnHold", tag: 0 } },
+      { event: { type: "release", code: 2 }, state: { stage: "Pending", tag: 2 } },
+    ];
+    const found = conformanceFound(model, spec, [...filler, deepTrace], [{ w: "sometimesSubmitted", trace: filler[0] }]);
+    assert.deepEqual(found.transitions, ["submit", "hold", "release"]);
+    assert.ok(found.traces.some((t) => t.some((e) => e.type === "release")), "per-transition witness trace must survive the 100-trace cap");
+
+    const plan = planModel(domain, found.events, found.shape, { strategy: "transitions", transitions: found.transitions, seedTraces: found.traces });
+    assert.deepEqual(plan.coverage.transitions, { total: 3, accepted: ["hold", "release", "submit"], refused: ["hold", "release", "submit"], uncovered: [] });
+    assert.deepEqual(plan.prefixForTransition.get("release")?.prefix, [{ type: "submit" }, { type: "hold" }]);
+
+    type Job = { stage: "Draft" | "Pending" | "OnHold"; tag: number };
+    const makeDriver = (bug?: "release-state" | "missing-refusal" | "reread-release") => {
+      const states = new Map<string, Job>();
+      const get = (key: string): Job => states.get(key) ?? { stage: "Draft", tag: 0 };
+      const apply = (key: string, event: { type: string; code?: number }): "accepted" | "refused" => {
+        const cur = get(key);
+        if (event.type === "submit") {
+          if (cur.stage !== "Draft" && bug !== "missing-refusal") return "refused";
+          states.set(key, { ...cur, stage: "Pending" });
+          return "accepted";
+        }
+        if (event.type === "hold") {
+          if (cur.stage !== "Pending") return "refused";
+          states.set(key, { ...cur, stage: "OnHold" });
+          return "accepted";
+        }
+        if (event.type === "release") {
+          if (cur.stage !== "OnHold" || !Number.isSafeInteger(event.code) || (event.code as number) <= 0) return "refused";
+          states.set(key, { stage: "Pending", tag: bug === "release-state" ? 999 : (event.code as number) });
+          return "accepted";
+        }
+        return "refused";
+      };
+      return {
+        reset: () => { states.clear(); },
+        dispatch: (key: string, event: { type: string; code?: number }) => apply(key, event),
+        receive: (key: string, raw: unknown) => {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "refused" as const;
+          const record = raw as Record<string, unknown>;
+          if (record.type === "release" && bug === "reread-release") {
+            const first = record.code;
+            if (!Number.isSafeInteger(first) || (first as number) <= 0) return "refused" as const;
+            const second = record.code;
+            return apply(key, { type: "release", code: second as number });
+          }
+          const parsed = domain.parseEvent(raw);
+          return parsed ? apply(key, parsed) : "refused" as const;
+        },
+        observe: (key: string) => get(key),
+      };
+    };
+
+    const good = await conformanceCheck(domain, found, makeDriver(), { keys: ["a"], walks: 0 });
+    assert.ok(good.plans > 0);
+    assert.deepEqual(good.coverage, { total: 3, accepted: ["hold", "release", "submit"], refused: ["hold", "release", "submit"], uncovered: [] });
+
+    await assert.rejects(conformanceCheck(domain, found, makeDriver("release-state"), { keys: ["a"], walks: 0 }), (error: unknown) =>
+      error instanceof ConformanceError && error.origin.startsWith("model path ") && /should be .*"tag":2.*but the application has .*"tag":999/.test(error.message));
+    await assert.rejects(conformanceCheck(domain, found, makeDriver("missing-refusal"), { keys: ["a"], walks: 0 }), (error: unknown) =>
+      error instanceof ConformanceError && /the spec refuses it, the application accepted it/.test(error.message));
+    await assert.rejects(conformanceCheck(domain, found, makeDriver("reread-release"), { keys: ["a"], walks: 0 }), /probe .*with an extra field and fields that change when read again/);
   });
 
   test("set canonicalization follows tagged variants and preserves list order", async () => {
@@ -1275,10 +1357,11 @@ pure val amountValues = Set(0, 1)`;
     const root = copyOfProject("test/app.test.vibe", (s) => s.replace('from "../src/app.vibe"\n', '$&import { initial } from "../gen/index.effect.vibe"\n')
       + "\n" + citing("spec/index.md", "A new order is an empty draft") + 'it("a new order is a draft", () => { assert.strictEqual(initial.status, "Draft") })\n');
     fs.writeFileSync(path.join(root, "test/draft.test.vibe"), citing("spec/index.md", "A new order is an empty draft") + 'import { assert, it } from "@effect/vitest"\nimport { initial } from "../gen/index.effect.vibe"\nit("a new order is a draft", () => { assert.strictEqual(initial.units, 0) })\n');
+    fs.writeFileSync(path.join(root, "test/mbt-only.test.ts"), citing("spec/index.md", "A new order is an empty draft") + 'import { it } from "vitest";\nimport { planModel } from "vibestack/testing";\nimport * as oracle from "../gen/index.ts";\nit("oracle only", () => { planModel(oracle, []); });\n');
     const { failed, said, text } = await run(root);
     assert.deepEqual(failed, ["tests"], text);
     const line = read("test/app.test.vibe", root).split("\n").length - 1;
-    assert.equal(said("tests", /^2 tests touch only generated code/)?.detail, `      test/app.test.vibe:${line}\n      test/draft.test.vibe: imports nothing but gen/ and test libraries`, text);
+    assert.equal(said("tests", /^3 tests touch only generated code/)?.detail, `      test/app.test.vibe:${line}\n      test/draft.test.vibe: imports nothing but gen/ and test libraries\n      test/mbt-only.test.ts: imports nothing but gen/ and test libraries`, text);
     assert.equal(said("tests", /^note: test\/app\.test\.vibe, test\/draft\.test\.vibe run in one runner, in one language/)?.ok, true, text);
   });
 
