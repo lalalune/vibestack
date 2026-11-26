@@ -106,4 +106,9 @@ describe("create-vibestack CLI", () => {
     expect(() => execFileSync(process.execPath, [cliPath, "taken", "--no-install"], { cwd, stdio: "pipe" })).toThrow();
     expect(() => execFileSync(process.execPath, [cliPath, "app", "--example", "nonexistent", "--no-install"], { cwd, stdio: "pipe" })).toThrow();
   });
+
+  test("help documents that default scaffolding runs install, init, and doctor", () => {
+    const out = execFileSync(process.execPath, [cliPath, "--help"], { encoding: "utf8" });
+    expect(out).toContain("Skip pnpm install, init, and doctor");
+  });
 });

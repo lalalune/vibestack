@@ -38,7 +38,7 @@ The spec format, naming rules and everything the tools accept are in
 ## Loading skills
 
 The canonical skill files are committed in `.agents/skills/`, including
-`sync`, `shell`, `prove`, `design`, `architect` and the [principles](#principles).
+`sync`, `shell`, `prove`, `design`, `architect`, `bug-review` and the [principles](#principles).
 Edit them there. `pnpm install` (via `vibestack link`) and `vibestack init`
 create project-relative skill links for Claude, Cursor, Muse, Grokbot and the
 other supported agents, and `CLAUDE.md` links to `AGENTS.md`. Use
@@ -115,6 +115,7 @@ installed the tools has `README.md` in `node_modules/vibestack/`.
 | [`shell` skill](.agents/skills/shell/SKILL.md) | writing `src/` or a test: VibeLang, the Effect adapter, the React interface, building and running |
 | [`prove` skill](.agents/skills/prove/SKILL.md) | a `proof` stage `✗`, writing a `.proof.dfy`, or a `//@` file |
 | [`design` skill](.agents/skills/design/SKILL.md) | anything a person looks at: layout, components, stories and tokens |
+| [`bug-review` skill](.agents/skills/bug-review/SKILL.md) | finishing an app, feature or PR: parallel review for bugs, leaks, state/rendering issues, inefficiencies and smells past `pnpm check` |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | generated files, tests, caching and CI; adding a package or task, or changing the tools under `packages/vibestack/`, `packages/studio/` or `packages/create-vibestack/` |
 | [README.md](README.md#commands) | the commands, Studio, configuration, and [adding Vibestack to an existing project](README.md#add-to-an-existing-project) |
 
@@ -392,6 +393,12 @@ How `pnpm check` runs them, in its `tests` stage:
 
 - `pnpm check` is where step 3 of the sync skill's loop stops: what is
   left waits on the user.
+- Before declaring an application, feature or non-trivial change done, run
+  the [`bug-review` skill](.agents/skills/bug-review/SKILL.md) (full pass
+  when finishing an app, diff-scoped pass for incremental changes), resolve
+  all discovered `P0`/`P1` bugs and errors (and any `P2`s worth fixing),
+  and confirm `pnpm check`, `pnpm lint`, and `pnpm analyze` (where defined)
+  are green after the final fix.
 - In the vibestack repository, if you changed `packages/vibestack/`,
   `packages/studio/` or `packages/create-vibestack/`, `pnpm selftest`
   passes, with a new case for each new kind of mistake the change catches,

@@ -1190,21 +1190,30 @@ function createCodePlugin(root: string) {
     Boolean(context.options[0]?.jsdoc) && comment.type === "Block" && String(comment.value).startsWith("*")
     && !withinFunction(context.sourceCode.getNodeByRangeIndex(comment.range[0]))
   const leftSchema = { type: "object", additionalProperties: { type: "integer", minimum: 1 } }
-  const reportIfExcess = (context: any, found: any[]) => {
+  const reportIfExcess = (context: any, node: AstNode, found: any[], kind: "commented" | "scheduled") => {
     const rel = relative(root, context.filename).split(sep).join("/")
-    if (found.length > (context.options[0]?.left?.[rel] ?? 0)) {
+    const limits = context.options[0]?.left as Record<string, number> | undefined
+    const allowed = limits && Object.hasOwn(limits, rel) ? limits[rel] : 0
+    if (found.length > allowed) {
       for (const problem of found) context.report(problem)
+    } else if (allowed > 0 && found.length < allowed) {
+      context.report({
+        node,
+        message: found.length === 0
+          ? `Stale ${kind} ratchet (${allowed}) for "${rel}": 0 remain; remove it so the ratchet tightens.`
+          : `Stale ${kind} ratchet (${allowed}) for "${rel}": ${found.length} remain; lower it to ${found.length} so the ratchet tightens.`,
+      })
     }
   }
   const commentsRule = {
     meta: { type: "problem" as const, schema: [{ type: "object", properties: { jsdoc: { type: "boolean" }, left: leftSchema }, additionalProperties: false }] },
     create(context: any) {
       return {
-        Program() {
+        Program(node: AstNode) {
           const invalid = context.sourceCode.getAllComments()
             .filter((comment: any) => !(CODE_DIRECTIVES[comment.type] ?? []).some((directive) => directive.test(comment.value)) && !isDocComment(context, comment))
             .map((comment: any) => ({ loc: comment.loc, message: `No code comments: only spec citations and tool directives (${WRITING_REF}).` }))
-          reportIfExcess(context, invalid)
+          reportIfExcess(context, node, invalid, "commented")
         },
       }
     },
@@ -1221,7 +1230,7 @@ function createCodePlugin(root: string) {
       const found: any[] = []
       return {
         ...Object.fromEntries(Object.entries(schedulingSelectors).map(([selector, message]) => [selector, (node: unknown) => found.push({ node, message })])),
-        "Program:exit": () => reportIfExcess(context, found),
+        "Program:exit": (node: AstNode) => reportIfExcess(context, node, found, "scheduled"),
       }
     },
   }
