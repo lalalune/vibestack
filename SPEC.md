@@ -524,7 +524,7 @@ line.
   (`machine()`), kept in a store (`stored(key)`) or kept by the shell
   (`machineOver(load, keep)`), of the Effect adapter
   `gen/<name>.effect.vibe`, which use `enabled` and `step`; a React component
-  goes through `useMachine` of `gen/<name>.react.ts`
+  goes through `useMachine` or `useMachineSelector` of `gen/<name>.react.ts`
   ([shell skill](.agents/skills/shell/SKILL.md)).
 - `gen/` is rebuilt by `pnpm gen` and `pnpm check`, and by
   `pnpm install` when every spec is valid.

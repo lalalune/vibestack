@@ -437,7 +437,9 @@ configured scopes are in `knip.config.js`, `.madgerc`, `.jscpd.json` and
 This repository runs its root specs in the ordinary check. Consumer
 workflows can reuse `lalalune/vibestack/.github/actions/setup@vX` and invoke
 `pnpm exec spec ci precompute-simulations` across four simulation jobs that
-assign modules by file hash. Each
+balance modules across shards with longest-processing-time bin-packing (using
+structural complexity by default, or an optional `--weights <json>` map, with
+`--list` to inspect the assignment). Each
 shard can fill gaps in its restored spec cache from a previous run of the same
 shard layout and lockfile. When a pull request starts native simulations, it
 can also read that shard’s published receipts from the push to its exact base

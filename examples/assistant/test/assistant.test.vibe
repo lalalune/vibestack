@@ -40,7 +40,7 @@ it.effect("take a turn, look up the bill and pay it once, whatever the model say
     // spec/assistant.md, "Only the person saves a card"
     try remember("4242")
     const borrowed = try (try Machine).get()
-    borrowed.card = "changed outside the machine"
+    try Effect.try(() => assert.throws(() => { borrowed.card = "changed outside the machine" }, TypeError))
     const retained = try (try Machine).get()
     const saved = try fs.stat(file)
     const untouched = try fs.readFileString(unrelated)
