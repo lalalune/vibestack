@@ -22,7 +22,7 @@ import { heading } from "../packages/vibestack/src/parse.ts";
 import { precomputeSimulations, prepareSimulationReceipts } from "../packages/vibestack/src/formal.ts";
 import { exec, run as tool, toolCpuSeconds } from "../packages/vibestack/src/run.ts";
 import { pendingSpecs, showPending, writeLedger } from "../packages/vibestack/src/review.ts";
-import { filesUnder, packageScripts, testInputs, testReceipt, writeWhole } from "../packages/vibestack/src/util.ts";
+import { filesUnder, packageScripts, testInputs, testReceipt, watchStamp, writeWhole } from "../packages/vibestack/src/util.ts";
 import { profile } from "../packages/vibestack/src/testing/profile.ts";
 import { installChromium } from "../packages/vibestack/src/chromium.ts";
 import { hostedCachedFixture, isolatedInstalls } from "./selftests/install.ts";
@@ -3443,7 +3443,7 @@ function eachCheck() {
       fs.writeFileSync(path.join(directory, "System.Private.CoreLib.dll"), "the self-contained runtime");
       fs.writeFileSync(path.join(directory, "Support.dll"), "a supporting assembly");
     }
-    const script = `const fs = await import("node:fs"); const { entry, toolchainFingerprint } = await import(${JSON.stringify(path.join(project, "packages/vibestack/src/cache.ts"))}); const proof = async () => (await entry(".", "prove", ["same obligation"])).name; const tests = (await entry(".", "tests", ["same"])).name; const before = await proof(); const unchanged = await proof(); const file = process.env.REINSTALL; const original = file && fs.existsSync(file) ? fs.readFileSync(file) : undefined; if (file) fs.writeFileSync(file, "the verifier, reinstalled"); const task = await toolchainFingerprint(); const reinstalled = await proof(); if (file) { if (original) fs.writeFileSync(file, original); else fs.rmSync(file); } console.log(JSON.stringify({ proof: before, unchanged, tests, task, reinstalled, restored: await proof() }));`;
+    const script = `const fs = await import("node:fs"); const { entry } = await import(${JSON.stringify(path.join(project, "packages/vibestack/src/cache.ts"))}); const { toolchainFingerprint } = await import(${JSON.stringify(path.join(project, "packages/vibestack/src/toolchain.ts"))}); const proof = async () => (await entry(".", "prove", ["same obligation"])).name; const tests = (await entry(".", "tests", ["same"])).name; const before = await proof(); const unchanged = await proof(); const file = process.env.REINSTALL; const original = file && fs.existsSync(file) ? fs.readFileSync(file) : undefined; if (file) fs.writeFileSync(file, "the verifier, reinstalled"); const task = await toolchainFingerprint(); const reinstalled = await proof(); if (file) { if (original) fs.writeFileSync(file, original); else fs.rmSync(file); } console.log(JSON.stringify({ proof: before, unchanged, tests, task, reinstalled, restored: await proof() }));`;
     const said = path.join(root, "cache/vibestack/toolchain.json");
     const keyed = async (name: string, reinstall?: string) => {
       const result = await exec(process.execPath, ["--input-type=module", "--eval", script], root,
@@ -3455,7 +3455,8 @@ function eachCheck() {
     for (const name of names) keys.push(await keyed(name));
     assert.deepEqual(keys[0], keys[1], "moving the same tools preserves proof and task results");
     const unavailable = await exec(process.execPath, ["--input-type=module", "--eval", [
-      `const { entry, toolchainFingerprint } = await import(${JSON.stringify(path.join(project, "packages/vibestack/src/cache.ts"))});`,
+      `const { entry } = await import(${JSON.stringify(path.join(project, "packages/vibestack/src/cache.ts"))});`,
+      `const { toolchainFingerprint } = await import(${JSON.stringify(path.join(project, "packages/vibestack/src/toolchain.ts"))});`,
       'const task = await toolchainFingerprint();',
       'const proof = await entry(".", "prove", ["same obligation"]).then(() => "accepted", (error) => error.message);',
       'console.log(JSON.stringify({ task, proof }));',
@@ -5703,7 +5704,7 @@ test("custom spec.dir accept/check round-trip with citations, -- separator for -
     "app/vibestack.json": JSON.stringify({ mode: "typescript", stages: { tests: "skip", explore: "skip" } }),
     "app/tsconfig.json": JSON.stringify({
       compilerOptions: { target: "es2023", module: "nodenext", strict: true, noEmit: true, allowImportingTsExtensions: true },
-      include: ["src", ".shared/**/*.ts", "../ext/**/*.ts"],
+      include: ["src", "*.config.ts", ".shared/**/*.ts", "../ext/**/*.ts"],
     }),
     "app/spec/index.md": "# Sound\n\n## Story: Ok\n\n### One\n\n```quint\npure val one = 1\n```\n",
     "app/src/index.ts": "export const x = 1;\n",
@@ -5711,6 +5712,12 @@ test("custom spec.dir accept/check round-trip with citations, -- separator for -
   const extApp = path.join(extRoot, "app");
   const typesWarm1 = await run(extApp);
   assert.ok(typesWarm1.said("types", /application typechecks/), typesWarm1.text);
+  const srcDir = path.join(extApp, "src");
+  const stampBeforeTransient = watchStamp(srcDir, false);
+  fs.mkdirSync(path.join(srcDir, "__transient__"));
+  assert.notEqual(watchStamp(srcDir, false), stampBeforeTransient, "adding a subdir inside a watched dir must change watchStamp");
+  fs.rmSync(path.join(srcDir, "__transient__"), { recursive: true, force: true });
+  assert.equal(watchStamp(srcDir, false), stampBeforeTransient, "create+delete inside a watched dir must preserve watchStamp");
   const typesWarm2 = await run(extApp);
   assert.ok(typesWarm2.said("types", /application typechecks/), typesWarm2.text);
 
@@ -5728,6 +5735,11 @@ test("custom spec.dir accept/check round-trip with citations, -- separator for -
   const typesExternal = await run(extApp);
   assert.ok(typesExternal.results.some((r) => r.stage === "types" && !r.ok), "adding ../ext/b/broken.ts must invalidate types cache");
   fs.rmSync(path.join(extRoot, "ext/b"), { recursive: true, force: true });
+
+  fs.writeFileSync(path.join(extApp, "broken.config.ts"), 'export const bad: number = "nope";\n');
+  const typesShallowFile = await run(extApp);
+  assert.ok(typesShallowFile.results.some((r) => r.stage === "types" && !r.ok), "adding broken.config.ts in a shallow-watched dir must invalidate types cache");
+  fs.rmSync(path.join(extApp, "broken.config.ts"), { force: true });
 
   const proofFailRoot = scratch({
     "package.json": JSON.stringify({

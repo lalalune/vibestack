@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type * as TS from "typescript";
-import { cacheCredentials, steady, toolchainFingerprint } from "./cache.ts";
+import { cacheCredentials, toolchainFingerprint } from "./toolchain.ts";
 import { loadConfig } from "./config.ts";
 import { evaluatorIdentity } from "./installed.ts";
 import { specFiles } from "./parse.ts";
@@ -227,7 +227,7 @@ async function legacyGenerationConfig(root: string, args: string[], env: NodeJS.
 
 export async function runTasks(root: string, args: string[]): Promise<number | null> {
   const fingerprint = path.join(root, ".cache", "toolchain.json");
-  const text = JSON.stringify(await steady(toolchainFingerprint)) + "\n";
+  const text = JSON.stringify(await toolchainFingerprint()) + "\n";
   if (!fs.existsSync(fingerprint) || fs.readFileSync(fingerprint, "utf8") !== text) writeWhole(fingerprint, text);
   let env: NodeJS.ProcessEnv = { ...process.env, TURBO_TELEMETRY_DISABLED: "1", VIBESTACK_QUINT_EVALUATOR: evaluatorIdentity(root) ?? randomUUID() };
   const credentials = path.join(os.homedir(), ".config", "vibestack", "turbo-cache.json");

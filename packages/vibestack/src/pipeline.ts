@@ -10,7 +10,7 @@ import type { Model } from "./gen.ts";
 import { conformance, type Machine } from "./conform.ts";
 import { explore } from "./explore.ts";
 import { abandonedProof, ensuresOf, LIB_FILE, libraryFor, proofPaths, prove, type Offered, type Proof } from "./prove.ts";
-import { formatStamp, run } from "./run.ts";
+import { run } from "./run.ts";
 import { cacheDirectory, loadConfig, type VibestackMode } from "./config.ts";
 import { doctor, formatDoctorReport } from "./doctor.ts";
 import { launchCreate, launchStudio, runCiCommand, runConformanceCommand, runExploreCommand, startPhaseTimings } from "./commands.ts";
@@ -22,7 +22,7 @@ import { generated, mirrorGen, publishGen, typecheckAll, proofUnits, proofFiles,
 import { simulation, type Simulation } from "./simulate.ts";
 import { runTasks } from "./tasks.ts";
 import { tests } from "./testing/check.ts";
-import { sha, indent, packageScripts, pruneSidecars, configuredSnapshot, testInputs, readSrc, codeDirs, codeDirOf, owner, specOwnerPaths, projectRoot, allDone, UNREAD, workspacePackages, fileDigestIfExists, withSpecDir, type Reported, type SrcFile } from "./util.ts";
+import { sha, indent, packageScripts, pruneSidecars, configuredSnapshot, watchStamp, testInputs, readSrc, codeDirs, codeDirOf, owner, specOwnerPaths, projectRoot, allDone, UNREAD, workspacePackages, fileDigestIfExists, withSpecDir, type Reported, type SrcFile, type WatchedPath } from "./util.ts";
 import { profile, type TestProfile } from "./testing/profile.ts";
 
 export { readSpecs, parseSpec, expandListHelpers, type Spec, type Rule, type Story } from "./parse.ts";
@@ -449,12 +449,7 @@ interface TypecheckCache {
   read: [string, string][];
   configured: [string, string][];
   safeSkip: boolean;
-  watched: [string, string][];
-}
-
-function pathStamp(target: string): string {
-  const s = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
-  return s ? formatStamp(s) : "";
+  watched: [string, string, boolean?][];
 }
 
 function sameEntries(a: readonly [string, string][], b: readonly [string, string][]): boolean {
@@ -474,14 +469,15 @@ async function typecheck(memory: Memory, root: string, dir: string, compiler: "v
   if (compiler === "vibelang") pruneSidecars(at);
   const contents = (files: string[]) => files.map((file): [string, string] => [path.relative(root, file), fileDigestIfExists(file)]);
   const matches = (saved: [string, string][]) => saved.every(([rel, expected]) => fileDigestIfExists(path.join(root, rel)) === expected);
-  const stamps = (paths: string[]) => paths.map((p): [string, string] => [path.relative(root, p), pathStamp(p)]);
+  const stamps = (paths: readonly WatchedPath[]) => paths.map((entry): [string, string, boolean?] =>
+    entry.shallow ? [path.relative(root, entry.path), watchStamp(entry.path, true), true] : [path.relative(root, entry.path), watchStamp(entry.path)]);
   const inputs = testInputs(at, "normal", "types");
-  const kept = inputs === undefined ? undefined : await entry(root, "types", ["types-v3", compiler, dir, inputs]);
+  const kept = inputs === undefined ? undefined : await entry(root, "types", ["types-v4", compiler, dir, inputs]);
   const passed = kept && recall<TypecheckCache>(memory, kept);
   if (passed && matches(passed.read)) {
     if (passed.safeSkip
       && matches(passed.configured)
-      && passed.watched.every(([rel, expected]) => pathStamp(path.join(root, rel)) === expected)) {
+      && passed.watched.every(([rel, expected, shallow]) => watchStamp(path.join(root, rel), shallow) === expected)) {
       return { ok: true, out: "" };
     }
     const snapshot = configuredSnapshot(at);

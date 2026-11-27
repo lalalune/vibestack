@@ -72,8 +72,10 @@ export function fileDigestIfExists(file: string): string {
 export function pruneSidecars(dir: string) {
   const configFile = path.join(dir, "tsconfig.json");
   let config: Record<string, any> | undefined;
+  let parsedJson = false;
   try {
     config = JSON.parse(fs.readFileSync(configFile, "utf8")) as Record<string, any>;
+    parsedJson = true;
   } catch {
     config = tsApi().readConfigFile(configFile, tsApi().sys.readFile).config;
   }
@@ -83,9 +85,18 @@ export function pruneSidecars(dir: string) {
   if (!fs.existsSync(sidecars)) return;
   const existing = filesUnder(sidecars, "");
   if (!existing.length) return;
-  const ts = tsApi();
-  const host: TS.ParseConfigHost = { ...ts.sys, readDirectory: () => [] };
-  for (const mirror of ts.parseJsonConfigFileContent(config, host, dir).options.rootDirs ?? []) {
+  const rawRootDirs: unknown = config?.compilerOptions?.rootDirs;
+  let rootDirs: string[];
+  if (Array.isArray(rawRootDirs) && rawRootDirs.every((entry): entry is string => typeof entry === "string" && !entry.includes("${configDir}"))) {
+    rootDirs = rawRootDirs.map((entry) => path.resolve(dir, entry));
+  } else if (parsedJson && !config?.extends) {
+    return;
+  } else {
+    const ts = tsApi();
+    const host: TS.ParseConfigHost = { ...ts.sys, readDirectory: () => [] };
+    rootDirs = ts.parseJsonConfigFileContent(config, host, dir).options.rootDirs ?? [];
+  }
+  for (const mirror of rootDirs) {
     const within = path.relative(sidecars, mirror);
     if (within.startsWith("..") || path.isAbsolute(within)) continue;
     const base = path.resolve(dir, ...within.split(path.sep).filter(Boolean).map(() => ".."));
@@ -96,10 +107,35 @@ export function pruneSidecars(dir: string) {
   }
 }
 
+export interface WatchedPath {
+  path: string;
+  shallow: boolean;
+}
+
 export interface ConfiguredSnapshot {
   files: string[];
   safeSkip: boolean;
-  watched: string[];
+  watched: WatchedPath[];
+}
+
+export function watchStamp(target: string, shallow = false): string {
+  const stat = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
+  if (!stat) return "";
+  if (!stat.isDirectory()) return `${stat.isSymbolicLink() ? "l" : "f"}:${formatStamp(stat)}`;
+  const entries: string[] = [];
+  for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git") continue;
+    if (entry.isDirectory()) {
+      if (!shallow) entries.push(`${entry.name}:d`);
+    } else if (entry.isSymbolicLink()) {
+      const linked = fs.statSync(path.join(target, entry.name), { throwIfNoEntry: false });
+      entries.push(`${entry.name}:${linked?.isDirectory() ? "ld" : linked?.isFile() ? "lf" : "lo"}`);
+    } else {
+      entries.push(`${entry.name}:f`);
+    }
+  }
+  entries.sort();
+  return `d:${digest(entries.join("\0"))}`;
 }
 
 /** What a package's tsconfig.json names: itself, the configurations it extends and the files it includes, VibeLang's among them, plus the paths whose stat stamps guard skipping `tsconfig` parsing on warm checks. */
@@ -126,23 +162,31 @@ export function configuredSnapshot(dir: string): ConfiguredSnapshot {
   const { fileNames } = ts.parseJsonSourceFileConfigFileContent(source, host, path.dirname(config), undefined, config, undefined,
     [".vibe", ".vibex"].map((extension) => ({ extension, isMixedContent: false, scriptKind: ts.ScriptKind.Deferred })));
   const files = [config, ...source.extendedSourceFiles ?? [], ...fileNames];
-  const watched = new Set<string>(absentProbes);
+  const watched = new Map<string, boolean>();
+  for (const probe of absentProbes) watched.set(probe, false);
+  const watchPath = (target: string, shallow: boolean) => {
+    const existing = watched.get(target);
+    if (existing === undefined || (existing && !shallow)) watched.set(target, shallow);
+  };
   const MAX_WATCHED = 256;
   const addTree = (target: string, recursive: boolean): boolean => {
     const stat = fs.lstatSync(target, { throwIfNoEntry: false });
     if (!stat) {
-      watched.add(target);
+      watchPath(target, false);
       return watched.size <= MAX_WATCHED;
     }
     if (stat.isSymbolicLink() || fs.realpathSync(target) !== target) return false;
     if (stat.isFile()) {
-      watched.add(target);
+      watchPath(target, false);
       return watched.size <= MAX_WATCHED;
     }
     if (!stat.isDirectory()) return false;
+    if (!recursive) {
+      watchPath(target, true);
+      return watched.size <= MAX_WATCHED;
+    }
     const queue = [target];
-    watched.add(target);
-    if (!recursive) return watched.size <= MAX_WATCHED;
+    watchPath(target, false);
     while (queue.length) {
       if (watched.size > MAX_WATCHED) return false;
       const cur = queue.pop()!;
@@ -153,8 +197,8 @@ export function configuredSnapshot(dir: string): ConfiguredSnapshot {
           const targetStat = fs.statSync(full, { throwIfNoEntry: false });
           if (!targetStat || targetStat.isDirectory()) return false;
         } else if (entry.isDirectory()) {
-          if (!watched.has(full)) {
-            watched.add(full);
+          if (watched.get(full) !== false) {
+            watchPath(full, false);
             queue.push(full);
           }
         }
@@ -216,7 +260,10 @@ export function configuredSnapshot(dir: string): ConfiguredSnapshot {
     }
     if (!safeSkip) break;
   }
-  return { files, safeSkip, watched: safeSkip ? [...watched].sort() : [] };
+  const watchedList = safeSkip
+    ? [...watched.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([watchedPath, shallow]) => ({ path: watchedPath, shallow }))
+    : [];
+  return { files, safeSkip, watched: watchedList };
 }
 
 /** Resolve a project folder before a command reads or writes its files. */
