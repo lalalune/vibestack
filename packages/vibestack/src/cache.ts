@@ -7,108 +7,28 @@ import { gunzipSync, zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { cacheDirectory } from "./config.ts";
 import { sha, tokenize } from "./util.ts";
 import { type Evaluator, installedEvaluator, executableDigest, InstallationChanged, LASTING, lasting, packageLocation, packageRoots } from "./installed.ts";
-import { NEEDS_DAFNY, findBin, findDafny, formatStamp, exec, onPath, stamp, writeWhole } from "./run.ts";
+import { findBin, findDafny, formatStamp, writeWhole } from "./run.ts";
+import {
+  cacheCredentials,
+  type DafnyInstall,
+  fileStamp,
+  findVibelangBinary,
+  packageVersion,
+  type ParsedStamp,
+  parseStamps,
+  readDafnyIdentity,
+  readDafnyInstallation,
+  readDafnyVersion,
+  resolveSolver,
+  sameFiles,
+  sameParsed,
+  solverCandidates,
+  solverStamp,
+} from "./toolchain.ts";
 
-export { executableDigest };
-
-/** Load an operator's publishing credential only for the exact cache endpoint it belongs to. */
-export function cacheCredentials(env: NodeJS.ProcessEnv, args: string[], declared: string | undefined, credentials: { apiUrl: string; writeToken: string }): NodeJS.ProcessEnv {
-  const options = args.slice(0, args.includes("--") ? args.indexOf("--") : args.length);
-  const supplied = (name: string) => options.some((arg) => arg === name || arg.startsWith(`${name}=`));
-  let endpoint = env.TURBO_API ?? declared;
-  for (const [index, arg] of options.entries()) {
-    if (arg === "--api") endpoint = options[index + 1];
-    else if (arg.startsWith("--api=")) endpoint = arg.slice("--api=".length);
-  }
-  return { ...env, ...env.TURBO_TOKEN === undefined && !supplied("--token") && endpoint === credentials.apiUrl
-    ? { TURBO_API: credentials.apiUrl, TURBO_TOKEN: credentials.writeToken } : {} };
-}
-
-const packageVersions = new Map<string, { file: string; stamp: string; version: string }>();
-const packageVersion = (dep: string) => {
-  const known = packageVersions.get(dep);
-  if (known) {
-    try {
-      if (stamp([known.file]) === known.stamp) return known.version;
-    } catch { /* search again below */ }
-  }
-  for (let dir = import.meta.dirname; dir !== path.dirname(dir); dir = path.dirname(dir)) {
-    const file = path.join(dir, "node_modules", dep, "package.json");
-    if (fs.existsSync(file)) {
-      const version = `${dep}@${JSON.parse(fs.readFileSync(file, "utf8")).version}`;
-      packageVersions.set(dep, { file, stamp: stamp([file]), version });
-      return version;
-    }
-  }
-  return dep;
-};
+export { cacheCredentials, executableDigest };
 
 const hashFileBytes = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-
-function treeFiles(directory: string, layout?: Map<string, string>): string[] {
-  if (layout) {
-    const real = fs.realpathSync(directory);
-    layout.set(directory, fileStamp(directory, false));
-    if (real !== directory) layout.set(real, fileStamp(real, false));
-  }
-  return fs.readdirSync(directory, { recursive: true, withFileTypes: true }).flatMap((entry) => {
-    const file = path.join(entry.parentPath, entry.name);
-    if (entry.isDirectory() || entry.isSymbolicLink()) layout?.set(file, fileStamp(file, false));
-    const linked = entry.isSymbolicLink() && fs.statSync(file, { bigint: true });
-    if (linked && linked.isDirectory()) layout?.set(fs.realpathSync(file), formatStamp(linked));
-    return entry.isFile() || (linked && linked.isFile()) ? [path.relative(directory, file).split(path.sep).join("/")] : [];
-  }).sort();
-}
-/** Runtime files are keyed by relative name and bytes, never their installation directory. */
-const treeDigest = (directory: string, files = treeFiles(directory), stamps?: ReadonlyMap<string, string>) =>
-  sha(...files.map((file) => {
-    const full = path.join(directory, file);
-    return `${file}\0${executableDigest(full, stamps?.get(full))}`;
-  }));
-
-/** Where the verifier runs from: its launcher and the runtime launchers it starts, its managed assemblies, and any separately installed .NET host. */
-function dafnyInstallation() {
-  const launcher = findDafny();
-  if (!launcher) throw new Error("Dafny is not on PATH or in ~/.cache/vibestack/dafny/4.11; the task cache needs its toolchain fingerprint");
-  const real = fs.realpathSync(launcher);
-  const locations = [path.dirname(real), path.resolve(path.dirname(real), "../libexec")];
-  const selectedFiles = [launcher, ...locations.map((dir) => path.join(dir, "Dafny.dll"))];
-  const assemblies = locations.find((dir) => fs.existsSync(path.join(dir, "Dafny.dll")));
-  if (!assemblies) throw new Error("Dafny.dll is not beside Dafny or in ../libexec; the task cache cannot fingerprint this installation");
-  const launchers = [real];
-  for (;;) {
-    const bytes = fs.readFileSync(launchers[launchers.length - 1]);
-    const next = bytes.subarray(0, 2).toString() === "#!" ? bytes.toString().match(/\bexec\s+"([^"\n]*[\\/]dotnet(?:\.exe)?)"/)?.[1] : undefined;
-    if (!next) break;
-    selectedFiles.push(next);
-    launchers.push(fs.realpathSync(next));
-    fs.accessSync(launchers[launchers.length - 1], fs.constants.X_OK);
-    if (launchers.length > 5) throw new Error("Dafny's runtime launcher chain does not terminate");
-  }
-  const runtimeDirs = ["host", "shared"].map((dir) => path.join(path.dirname(launchers[launchers.length - 1]), dir));
-  selectedFiles.push(...runtimeDirs);
-  const runtime = runtimeDirs.filter((dir) => fs.existsSync(dir));
-  if (!runtime.length && !fs.existsSync(path.join(assemblies, "System.Private.CoreLib.dll")))
-    throw new Error("Dafny's external .NET runtime cannot be fingerprinted; use a self-contained release or an explicit dotnet launcher");
-  return { launcher, launchers, assemblies, runtime, selectedFiles };
-}
-
-interface DafnyInstall {
-  launchers: string[];
-  assemblies: string;
-  runtime: string[];
-  trees: Map<string, string[]>;
-  files: string[];
-  stamps: Map<string, string>;
-  at: string;
-  unchanged: () => boolean;
-}
-
-const dafnySaid = (version: string | undefined, stopped?: string, out = "") => {
-  const problem = !version ? `Dafny could not be run (${out.trim().split("\n")[0] || "it printed no version"})`
-    : !version.startsWith("4.11.") ? `this is Dafny ${version}, and LemmaScript targets Dafny 4.11.x` : undefined;
-  return { version, problem: stopped ?? (problem && `${problem}: ${NEEDS_DAFNY}`) };
-};
 /**
  * Dafny's files and their stamps, as installed now: read once for each check (`steady`), and on
  * every call outside one.
@@ -199,35 +119,8 @@ export function certifyInstallation() {
 }
 
 function installation(): DafnyInstall | { at: string; files?: undefined } {
-  const now = (): DafnyInstall | { at: string; files?: undefined } => {
-    try {
-      const { launcher, launchers, assemblies, runtime, selectedFiles } = dafnyInstallation();
-      const layout = new Map<string, string>();
-      for (const file of selectedFiles) {
-        layout.set(file, fileStamp(file, false));
-        for (let dir = path.dirname(file); dir !== path.dirname(dir); dir = path.dirname(dir)) {
-          const stat = fs.lstatSync(dir, { bigint: true, throwIfNoEntry: false });
-          if (stat?.isSymbolicLink()) layout.set(dir, formatStamp(stat));
-        }
-      }
-      const trees = new Map<string, string[]>([assemblies, ...runtime].map((dir) => [dir, treeFiles(dir, layout)]));
-      const files = [...launchers, ...[...trees.entries()].flatMap(([dir, entries]) => entries.map((f) => path.join(dir, f)))];
-      const stamps = new Map<string, string>();
-      try {
-        for (const file of files) stamps.set(file, formatStamp(fs.statSync(file, { bigint: true })));
-        const parsedStamps = parseStamps(stamps);
-        const parsedLayout = parseStamps(layout);
-        return { launchers, assemblies, runtime, trees, files, stamps, at: JSON.stringify([...layout, ...stamps]),
-          unchanged: () => findDafny() === launcher && sameParsed(parsedStamps, true) && sameParsed(parsedLayout, false) };
-      } catch (e) {
-        return { at: (e as Error).message };
-      }
-    } catch {
-      return { at: "" };
-    }
-  };
   const scope = checking.getStore();
-  return scope ? (scope.installation ??= now()) : now();
+  return scope ? (scope.installation ??= readDafnyInstallation()) : readDafnyInstallation();
 }
 /** Run a check, which reads Dafny's installation once: its final certification checks that installation even after a wholly warm run. */
 export const steady = <T>(run: () => Promise<T>) => {
@@ -391,41 +284,6 @@ function launcherInputs(exe: string, packageDir: string, exists: (file: string) 
   return { digest: sha(...lines), entry };
 }
 
-type Stamps = Iterable<readonly [string, string]>;
-type ParsedStamp = readonly [file: string, empty: boolean, dev: bigint, ino: bigint, size: bigint, mtimeNs: bigint, ctimeNs: bigint];
-const fileStamp = (file: string, follow = true) => {
-  try {
-    const stat = (follow ? fs.statSync : fs.lstatSync)(file, { bigint: true, throwIfNoEntry: false });
-    return stat ? formatStamp(stat) : "";
-  } catch {
-    return "";
-  }
-};
-function parseStamps(entries: Stamps): ParsedStamp[] {
-  const out: ParsedStamp[] = [];
-  for (const [file, expected] of entries) {
-    if (!expected) {
-      out.push([file, true, 0n, 0n, 0n, 0n, 0n]);
-      continue;
-    }
-    const parts = expected.split(":");
-    if (parts.length !== 5) out.push([file, false, -1n, -1n, -1n, -1n, -1n]);
-    else out.push([file, false, BigInt(parts[0]), BigInt(parts[1]), BigInt(parts[2]), BigInt(parts[3]), BigInt(parts[4])]);
-  }
-  return out;
-}
-function sameParsed(entries: readonly ParsedStamp[], follow: boolean): boolean {
-  const statFn = follow ? fs.statSync : fs.lstatSync;
-  for (let i = 0; i < entries.length; i++) {
-    const [file, empty, dev, ino, size, mtimeNs, ctimeNs] = entries[i];
-    let stat: fs.BigIntStats | undefined;
-    try { stat = statFn(file, { bigint: true, throwIfNoEntry: false }); } catch { stat = undefined; }
-    if (empty) { if (stat !== undefined) return false; }
-    else if (!stat || stat.dev !== dev || stat.ino !== ino || stat.size !== size || stat.mtimeNs !== mtimeNs || stat.ctimeNs !== ctimeNs) return false;
-  }
-  return true;
-}
-const sameFiles = (files: Stamps, links: Stamps) => sameParsed(parseStamps(files), true) && sameParsed(parseStamps(links), false);
 const isStamps = (value: unknown): value is [string, string][] => Array.isArray(value) && value.every((entry) =>
   Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && typeof entry[1] === "string");
 
@@ -826,32 +684,11 @@ function perDafny<T>(read: (inst: DafnyInstall | undefined) => Promise<T>, kept:
   };
 }
 
-async function readDafnyVersion(inst: DafnyInstall | undefined): Promise<{ version?: string; problem?: string }> {
-  try {
-    const installed = inst && lasting(`dafny --version ${inst.files[0]}`, [inst.files[0]], sha(...inst.files.map((f) => inst.stamps.get(f)!)));
-    if (installed?.value) return dafnySaid(installed.value);
-    const r = await exec(inst?.launchers[0] ?? findDafny() ?? "dafny", ["--version"], process.cwd());
-    const version = r.status === 0 ? r.stdout.match(/\d+\.\d+\.\d+/)?.[0] : undefined;
-    if (version && !r.stopped) installed?.keep(version);
-    return dafnySaid(version, r.stopped, `${r.stdout}${r.stderr}`);
-  } catch (e) {
-    return { problem: `Dafny could not be run (${(e as Error).message}): ${NEEDS_DAFNY}` };
-  }
-}
-
 /** The version of Dafny on the PATH, or why it could not be read: asked of Dafny only when its installation changed. */
 export const dafnyVersion = perDafny(readDafnyVersion, (r) => !r.problem);
 
 /** The verifier's launchers, managed assemblies, and any separately installed .NET host, by their bytes. */
-export const dafnyIdentity = perDafny(async (inst) => {
-  const { launchers, assemblies, runtime } = inst ?? dafnyInstallation();
-  return {
-    version: (await readDafnyVersion(inst)).version,
-    launchers: launchers.map((file) => executableDigest(file, inst?.stamps.get(file))),
-    assemblies: treeDigest(assemblies, inst?.trees.get(assemblies), inst?.stamps),
-    runtime: runtime.map((dir) => [path.basename(dir), treeDigest(dir, inst?.trees.get(dir), inst?.stamps)]),
-  };
-});
+export const dafnyIdentity = perDafny(readDafnyIdentity);
 
 /** Dafny, told apart by its installation and the solver it is given. */
 export const verifierIdentity = perCheck(async () => {
@@ -863,75 +700,10 @@ export function dafnyLauncher() {
   return now.files ? now.launchers[0] : (findDafny() ?? "dafny");
 }
 
-class SolverUnavailable extends Error {}
-
-/**
- * The solver selected by Dafny's installation, pinned for every proof and recorded in its cache key; selected again once
- * per check from the bundled candidates and Z3 on the PATH. A candidate's version is asked of it only once it changed.
- */
-function solverCandidates(): string[] {
-  const dafny = findDafny();
-  const z3 = onPath("z3");
-  const candidates: string[] = [];
-  if (dafny) {
-    const real = fs.realpathSync(dafny);
-    for (const dir of [path.dirname(real), path.join(path.dirname(real), "..", "libexec")]) {
-      const bundled = path.join(dir, "z3", "bin");
-      if (!fs.existsSync(bundled)) continue;
-      const preferred = (name: string) => name.includes("4.12.1") ? 0 : name.includes("4.8.5") ? 1 : 2;
-      candidates.push(...fs.readdirSync(bundled).filter((name) => /^z3(-\d+(\.\d+)*)?(\.exe)?$/.test(name))
-        .sort((a, b) => preferred(a) - preferred(b) || a.localeCompare(b)).map((name) => path.join(bundled, name)));
-    }
-  }
-  if (z3) candidates.push(z3);
-  return candidates;
-}
-const solverStamp = (candidates: string[]) => JSON.stringify(candidates.map((file) => [file, fileStamp(file), fileStamp(file, false)]));
-
-export const solver = perCheck(async () => {
-  const candidates = solverCandidates();
+export const solver = perCheck(() => resolveSolver((at) => {
   const check = checking.getStore();
-  if (check) check.solverAt = solverStamp(candidates);
-  for (const candidate of candidates) {
-    try {
-      const real = fs.realpathSync(candidate);
-      const { value, keep } = lasting(`z3 --version ${candidate}`, [candidate, real]);
-      if (value) return { path: real, version: value };
-      const result = await exec(candidate, ["--version"], path.dirname(candidate));
-      const version = result.status === 0 && !result.stopped && result.stdout.match(/Z3 version (\d+\.\d+\.\d+)/)?.[1];
-      if (version) return { path: real, version: keep(version) };
-    } catch { /* try the next solver supplied by this installation */ }
-  }
-  throw new SolverUnavailable("the proof stage needs the Z3 solver bundled with Dafny or on the PATH");
-});
-async function findVibelangBinary(): Promise<string | null> {
-  try {
-    const { findBinary } = await import("vibelang/binary");
-    return findBinary();
-  } catch {
-    return null;
-  }
-}
-
-/** The native toolchain that a Turbo task's inputs cannot read from the repository. */
-export async function toolchainFingerprint() {
-  const z3 = await solver().catch((error: unknown) => {
-    if (error instanceof SolverUnavailable) return null;
-    throw error;
-  });
-  const compiler = await findVibelangBinary();
-  fs.accessSync(process.execPath, fs.constants.X_OK);
-  if (compiler) fs.accessSync(compiler, fs.constants.X_OK);
-  if (z3) fs.accessSync(z3.path, fs.constants.X_OK);
-  return {
-    platform: process.platform, arch: process.arch,
-    node: { version: process.versions.node, digest: executableDigest(process.execPath) },
-    dafny: findDafny() ? await dafnyIdentity() : null,
-    z3: z3 && { version: z3.version, digest: executableDigest(z3.path) },
-    vibelang: compiler ? { version: packageVersion("vibelang"), digest: executableDigest(compiler) } : null,
-    packages: ["@informalsystems/quint", "lemmascript", "vibelang-runtime", "vibelang-vite", "typescript", "vitest", "effect", "@effect/platform-node", "@effect/vitest"].map(packageVersion),
-  };
-}
+  if (check) check.solverAt = at;
+}));
 
 const ext = path.extname(import.meta.filename);
 /** A tool's imports of other tools that run with it, as it starts or once it asks for them: `import type` and `export type` load nothing. */

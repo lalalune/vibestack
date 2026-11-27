@@ -302,9 +302,13 @@ export async function explore(directory: string, remember: Remember, mode: TestP
     const { explore: seconds } = profile(mode);
     const fingerprint = pageInputs(root, mode);
     const run = async (): Promise<Reported<"explore">> => {
-      fs.mkdirSync(path.dirname(saved), { recursive: true });
-      const fresh = await served(root, script, resolved, (origin) => bombadil(root, origin, { seconds }, saved));
-      if (fresh.kind !== "broke") drop();
+      const output = path.join(scratch, "run");
+      const fresh = await served(root, script, resolved, (origin) => bombadil(root, origin, { seconds }, output));
+      if (fresh.kind === "broke") {
+        fs.rmSync(saved, { recursive: true, force: true });
+        fs.mkdirSync(path.dirname(saved), { recursive: true });
+        if (fs.existsSync(output)) fs.cpSync(output, saved, { recursive: true });
+      }
       return fresh.kind === "held" ? [true, "explore", `${page}: ${fresh.actions} actions in ${seconds} s broke no property of ${specification} (${command})`, "", page]
         : fresh.kind === "broke" ? broke(fresh, "breaks")
         : failed(fresh.kind === "failed" ? fresh : { kind: "failed", why: "Bombadil could not explore the page", output: fresh.output });

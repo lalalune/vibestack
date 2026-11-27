@@ -29,7 +29,7 @@
     "test:models": "node packages/vibestack/src/spec.ts tasks check",
     "typecheck": "vibelang --noEmit -p tsconfig.json",
     "lint": "node packages/vibestack/src/spec.ts tasks //#lint:js //#lint:css",
-    "lint:js": "eslint . --config eslint.config.js --max-warnings 0",
+    "lint:js": "eslint . --config eslint.config.js --max-warnings 0 --concurrency auto",
     "lint:css": "stylelint \"**/*.css\" --allow-empty-input",
     "analyze": "node -e \"import('node:child_process').then(async({spawn})=>{const run=(c,a)=>new Promise(r=>{const p=spawn(c,a,{stdio:['ignore','pipe','pipe'],shell:process.platform==='win32'});let o='';p.stdout.on('data',d=>o+=d);p.stderr.on('data',d=>o+=d);p.on('close',code=>r({code:code??1,o}))});const res=await Promise.all([run('knip',[]),run('madge',['--circular','apps','packages','template','selftest']),run('jscpd',['.'])]);for(const r of res){if(r.o)process.stdout.write(r.o);if(r.code)process.exitCode=r.code;}})\"",
     "quick": "node packages/vibestack/src/spec.ts tasks typecheck test //#lint:js //#lint:css",

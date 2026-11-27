@@ -49,6 +49,7 @@ function syncDirectory(srcDir, destDir, options = {}) {
 }
 
 const pkgDir = path.resolve(import.meta.dirname, "..");
+const srcDir = path.join(pkgDir, "src");
 const distDir = path.join(pkgDir, "dist");
 const cacheDir = path.join(pkgDir, ".cache");
 const stageDist = path.join(cacheDir, "dist-stage");
@@ -57,7 +58,22 @@ const bundledTemplateDir = path.join(pkgDir, "template");
 const sourceTemplateDir = path.resolve(pkgDir, "..", "..", "template");
 const tscBin = createRequire(import.meta.url).resolve("typescript/bin/tsc");
 
+function removeOrphanedOutputs(dir, rootDir) {
+  for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, item.name);
+    if (item.isDirectory()) {
+      removeOrphanedOutputs(abs, rootDir);
+      if (fs.readdirSync(abs).length === 0) fs.rmdirSync(abs);
+      continue;
+    }
+    if (!/\.(?:js|d\.ts)$/.test(item.name)) continue;
+    const sourceRel = path.relative(rootDir, abs).replace(/(?:\.d\.ts|\.js)$/, ".ts");
+    if (!fs.existsSync(path.join(srcDir, sourceRel))) fs.rmSync(abs, { force: true });
+  }
+}
+
 fs.mkdirSync(stageDist, { recursive: true });
+removeOrphanedOutputs(stageDist, stageDist);
 execFileSync(
   process.execPath,
   [
