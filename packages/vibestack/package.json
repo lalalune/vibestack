@@ -1,6 +1,6 @@
 {
   "name": "vibestack",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Stories, rules and Quint in a Markdown spec tree; verified TypeScript out.",
   "license": "MIT",
   "type": "module",

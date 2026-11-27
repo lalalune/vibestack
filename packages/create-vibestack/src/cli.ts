@@ -402,6 +402,13 @@ function installAndSetup(targetDir: string): void {
     throw new Error(`pnpm exec vibestack init --yes exited with status ${initStatus}.`);
   }
 
+  if (fs.existsSync(path.join(targetDir, "packages", "design-system", "tokens.json"))) {
+    const tokensStatus = runCommand(pnpm, ["--filter", "@repo/design-system", "build"], targetDir);
+    if (tokensStatus !== 0) {
+      throw new Error(`pnpm --filter @repo/design-system build exited with status ${tokensStatus}.`);
+    }
+  }
+
   runCommand(pnpm, ["exec", "vibestack", "doctor"], targetDir);
 }
 

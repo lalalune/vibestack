@@ -1,6 +1,6 @@
 {
   "name": "create-vibestack",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "description": "Create a new Vibestack project from the starter template or an example.",
   "license": "MIT",

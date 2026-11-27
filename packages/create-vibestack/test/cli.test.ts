@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 const pkgDir = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(pkgDir, "dist", "cli.js");
+const pkgVersion = (JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as { version: string }).version;
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
@@ -102,7 +103,7 @@ describe("create-vibestack CLI", () => {
     );
     expectDirectVibestackPin(
       path.join(cwd, "release-app"),
-      "https://github.com/lalalune/vibestack/releases/download/v0.2.0/vibestack-0.2.0.tgz",
+      `https://github.com/lalalune/vibestack/releases/download/v${pkgVersion}/vibestack-${pkgVersion}.tgz`,
     );
   });
 
