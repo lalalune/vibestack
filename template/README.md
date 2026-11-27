@@ -18,7 +18,7 @@ pnpm dev
 | Command | Does |
 | --- | --- |
 | `pnpm dev` | Runs the app and launches Vibestack Studio |
-| `pnpm studio` | Opens Vibestack Studio (or run `pnpm dlx vibestack-studio`) |
+| `pnpm studio` | Opens Vibestack Studio |
 | `pnpm cli <command>` | Runs project CLI subcommands (`pnpm cli --help` lists commands; pass `--json` for structured output) |
 | `pnpm check` | Runs the full verification pipeline: model, simulation, proofs, types, tests, traces, explore, review |
 | `pnpm gen` | Generates TypeScript, Effect adapters, and React hooks from `spec/` |

@@ -39,12 +39,14 @@ For desktop app deeplinks (`codex://`, `claude://`, `grokbot://`, `cursor://`) o
 
 ```bash
 # New project (or scaffold an example: order | dashboard | fullstack | assistant)
-pnpm create vibestack my-app
+pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/create-vibestack.tgz create-vibestack my-app
 cd my-app && pnpm exec vibestack doctor --install-dafny && pnpm dev
 
 # Launch Vibestack Studio on any project with spec/
-pnpm dlx vibestack-studio
+pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio
 ```
+
+> Packages are distributed as `.tgz` tarballs on [GitHub Releases](https://github.com/lalalune/vibestack/releases) (the unscoped `vibestack` name on npm belongs to an unrelated package).
 
 ## The stack
 
@@ -77,9 +79,14 @@ Agents follow [AGENTS.md](AGENTS.md), [SPEC.md](SPEC.md), and [`.agents/skills/`
 ## Studio
 
 ```bash
-pnpm dlx vibestack-studio                  # open Vibestack Studio on the current project
-npx vibestack-studio ./path/to/project     # open Vibestack Studio on any directory with spec/
-pnpm dev                                   # in a scaffolded app: Studio + app dev servers
+# open Vibestack Studio on the current project
+pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio
+
+# open Vibestack Studio on any directory with spec/
+npx --yes --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio ./path/to/project
+
+# in a scaffolded app: Studio + app dev servers
+pnpm dev
 ```
 
 `vibestack-studio` is a standalone package with zero runtime npm dependencies and a prebuilt React UI. Inspect and edit **Stories**, live **Layout** previews, and interactive **States** graphs side by side, run checks, and sign off directly in the browser.
@@ -89,7 +96,7 @@ pnpm dev                                   # in a scaffolded app: Studio + app d
 `vibestack init` is non-destructive and auto-detects `vibelang` vs. plain `typescript` mode (pass `--mode vibelang|typescript|specs-only` or `--exclude <dirs>` to customize):
 
 ```bash
-pnpm add -D vibestack
+pnpm add -D https://github.com/lalalune/vibestack/releases/latest/download/vibestack.tgz
 pnpm exec vibestack init
 pnpm exec vibestack doctor --install-dafny
 pnpm exec spec new
@@ -126,11 +133,11 @@ Configure Vibestack in an optional root `vibestack.json` (or under `"vibestack"`
 
 | Command | Does |
 | --- | --- |
-| `pnpm create vibestack <name> [--example order\|dashboard\|fullstack\|assistant]` | Scaffolds a clean project from `template/` or a standalone example |
+| `pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/create-vibestack.tgz create-vibestack <name> [--example order\|dashboard\|fullstack\|assistant]` | Scaffolds a clean project from `template/` or a standalone example |
 | `pnpm exec vibestack init [<dir>] [--mode vibelang\|typescript\|specs-only]` | Non-destructively initializes an existing repository |
 | `pnpm vibestack upgrade [version] [--dry-run]` | Upgrades `vibestack`, refreshes managed skills/docs, and aligns toolchain pins |
 | `pnpm exec vibestack doctor [--install-dafny]` | Checks Node 26+, pnpm, Dafny 4.11, Quint, Chromium, and installs Dafny 4.11 if missing |
-| `pnpm dlx vibestack-studio [<dir>]` / `npx vibestack-studio [<dir>]` | Launches standalone Vibestack Studio on any project with `spec/` |
+| `pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio [<dir>]` | Launches standalone Vibestack Studio on any project with `spec/` |
 | `pnpm dev` | Starts Vibestack Studio and every workspace package's `dev` script together |
 | `pnpm check [<dir>] [--json] [--timings]` | Runs generation, simulation, proofs, types, tests, conformance, and exploration |
 | `pnpm gen [<dir>]` | Generates `gen/` only |
@@ -146,18 +153,18 @@ Each example is a standalone project consuming `vibestack` as a package:
 
 | Project | What it covers | Scaffold / Open in Studio |
 | --- | --- | --- |
-| [Order checkout](examples/order/README.md) | Guards, payments, cancellation, and a proved event ledger | `pnpm create vibestack demo --example order` · `pnpm dlx vibestack-studio examples/order` |
-| [Team dashboard](examples/dashboard/README.md) | Shared spreadsheets, chat notifications, and a project registry | `pnpm create vibestack demo --example dashboard` · `pnpm dlx vibestack-studio examples/dashboard` |
-| [Shared to-do list](examples/fullstack/README.md) | HTTP server, browser client, and two tabs over an unreliable network | `pnpm create vibestack demo --example fullstack` · `pnpm dlx vibestack-studio examples/fullstack` |
-| [Assistant](examples/assistant/README.md) | Trusted senders, bounded turns, confirmation before payment, secret card | `pnpm create vibestack demo --example assistant` · `pnpm dlx vibestack-studio examples/assistant` |
+| [Order checkout](examples/order/README.md) | Guards, payments, cancellation, and a proved event ledger | `create-vibestack demo --example order` · `vibestack-studio examples/order` |
+| [Team dashboard](examples/dashboard/README.md) | Shared spreadsheets, chat notifications, and a project registry | `create-vibestack demo --example dashboard` · `vibestack-studio examples/dashboard` |
+| [Shared to-do list](examples/fullstack/README.md) | HTTP server, browser client, and two tabs over an unreliable network | `create-vibestack demo --example fullstack` · `vibestack-studio examples/fullstack` |
+| [Assistant](examples/assistant/README.md) | Trusted senders, bounded turns, confirmation before payment, secret card | `create-vibestack demo --example assistant` · `vibestack-studio examples/assistant` |
 
 ## Repository
 
 | Path | Holds |
 | --- | --- |
-| `packages/vibestack` | Published as `vibestack`: CLI, generator, simulator, prover, testing/design/eslint exports, and bundled skills |
-| `packages/studio` | Published as `vibestack-studio`: standalone Vibestack Studio server and prebuilt React UI |
-| `packages/create-vibestack` | Published as `create-vibestack`: project scaffolder bundling `template/` |
+| `packages/vibestack` | Released as `vibestack.tgz`: CLI, generator, simulator, prover, testing/design/eslint exports, and bundled skills |
+| `packages/studio` | Released as `vibestack-studio.tgz`: standalone Vibestack Studio server and prebuilt React UI |
+| `packages/create-vibestack` | Released as `create-vibestack.tgz`: project scaffolder bundling `template/` |
 | `apps/site` | Marketing landing page deployed to [vibestack.fun](https://vibestack.fun) |
 | `template/` | Starter workspace (`template/apps/app`, `template/packages/cli`, `template/packages/design-system`, `template/packages/ui`, `template/spec/`) |
 | `examples/` | Standalone example applications (`examples/order`, `examples/dashboard`, `examples/fullstack`, `examples/assistant`) |

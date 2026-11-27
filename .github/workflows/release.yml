@@ -2,15 +2,14 @@ name: release
 
 # A v* tag matching packages/{vibestack,studio,create-vibestack}/package.json builds all three
 # packages, runs the tools' self-test through the shared cache (or one task at a time where CI
-# has not warmed it), publishes all three packages to npm with OIDC provenance, and attaches
-# their .tgz tarballs to the GitHub release (CONTRIBUTING.md, "Releasing").
+# has not warmed it), and attaches both versioned and unversioned latest .tgz tarballs to the
+# GitHub release (CONTRIBUTING.md, "Releasing").
 on:
   push:
     tags: ["v*"]
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   release:
@@ -38,20 +37,16 @@ jobs:
       - run: pnpm selftest --only --concurrency=1
       - name: Pack release tarballs
         run: |
-          mkdir -p "$RUNNER_TEMP/release-tarballs"
-          pnpm --filter vibestack pack --pack-destination "$RUNNER_TEMP/release-tarballs"
-          pnpm --filter vibestack-studio pack --pack-destination "$RUNNER_TEMP/release-tarballs"
-          pnpm --filter create-vibestack pack --pack-destination "$RUNNER_TEMP/release-tarballs"
-          ls -lh "$RUNNER_TEMP/release-tarballs"
-      - name: Publish packages to npm
-        continue-on-error: true
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          for tarball in "$RUNNER_TEMP/release-tarballs"/*.tgz; do
-            echo "Publishing $tarball..."
-            npm publish "$tarball" --provenance --access public
-          done
+          tag="${GITHUB_REF_NAME#v}"
+          dir="$RUNNER_TEMP/release-tarballs"
+          mkdir -p "$dir"
+          pnpm --filter vibestack pack --pack-destination "$dir"
+          pnpm --filter vibestack-studio pack --pack-destination "$dir"
+          pnpm --filter create-vibestack pack --pack-destination "$dir"
+          cp "$dir/vibestack-${tag}.tgz" "$dir/vibestack.tgz"
+          cp "$dir/vibestack-studio-${tag}.tgz" "$dir/vibestack-studio.tgz"
+          cp "$dir/create-vibestack-${tag}.tgz" "$dir/create-vibestack.tgz"
+          ls -lh "$dir"
       - name: Create GitHub release
         run: gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-tarballs"/*.tgz --verify-tag --generate-notes
         env:

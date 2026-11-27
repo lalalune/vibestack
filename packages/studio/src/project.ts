@@ -32,13 +32,14 @@ export const PUBLIC = BUNDLED ? path.join(import.meta.dirname, "page") : path.jo
 export const NODE = process.execPath;
 
 const SPEC_BIN = process.platform === "win32" ? "spec.cmd" : "spec";
+const VIBESTACK_RELEASE_TARBALL = "https://github.com/lalalune/vibestack/releases/latest/download/vibestack.tgz";
 
 /**
  * Resolve the target project's `spec` command in priority order:
  * 1. Target project's `node_modules/.bin/spec`
  * 2. Target project's vendored `vibestack/spec.ts`
  * 3. Monorepo sibling `packages/vibestack/{dist/spec.js,src/spec.ts}`
- * 4. Fallback `pnpm dlx vibestack`
+ * 4. Fallback `pnpm dlx --package=<GitHub Release tarball> vibestack`
  * @throws {never}
  */
 export function specCommand(root: string, args: string[]): [string, string[]] {
@@ -64,7 +65,7 @@ export function specCommand(root: string, args: string[]): [string, string[]] {
   const sibling = siblingCandidates.find((file) => fs.existsSync(file));
   if (sibling) return [NODE, [sibling, ...args]];
 
-  return ["pnpm", ["dlx", "vibestack", ...args]];
+  return ["pnpm", ["dlx", `--package=${VIBESTACK_RELEASE_TARBALL}`, "vibestack", ...args]];
 }
 
 /** @throws {never} */

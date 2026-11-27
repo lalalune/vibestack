@@ -5598,6 +5598,12 @@ assert.equal((await other).status, 0);
     assert.equal(localUpgrade.status, 0, localUpgrade.stdout + localUpgrade.stderr);
     assert.match(localUpgrade.stdout, /catalog\.vibestack removed/, localUpgrade.stdout);
     assert.match(localUpgrade.stdout, /apps\/web\/package\.json devDependencies\.vibestack -> file:/, localUpgrade.stdout);
+    const defaultUpgrade = await runCli(cli, catalogWs, "upgrade", "--dry-run");
+    assert.equal(defaultUpgrade.status, 0, defaultUpgrade.stdout + defaultUpgrade.stderr);
+    assert.match(defaultUpgrade.stdout, /https:\/\/github\.com\/lalalune\/vibestack\/releases\/latest\/download\/vibestack\.tgz/, defaultUpgrade.stdout);
+    const versionUpgrade = await runCli(cli, catalogWs, "upgrade", "0.2.0", "--dry-run");
+    assert.equal(versionUpgrade.status, 0, versionUpgrade.stdout + versionUpgrade.stderr);
+    assert.match(versionUpgrade.stdout, /https:\/\/github\.com\/lalalune\/vibestack\/releases\/download\/v0\.2\.0\/vibestack-0\.2\.0\.tgz/, versionUpgrade.stdout);
 
     const doctorRes = await runCli(cli, brownfield, "doctor");
     assert.equal(doctorRes.status, 0, doctorRes.stdout + doctorRes.stderr);

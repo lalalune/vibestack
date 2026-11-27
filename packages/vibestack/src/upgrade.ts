@@ -10,7 +10,27 @@ import { VITEST_CONFIG } from "./testing/check.ts";
 export { linkProjectAgents as linkAgents };
 
 export const MANIFEST_PATH = ".agents/.vibestack-manifest.json";
+export const GITHUB_RELEASES_BASE = "https://github.com/lalalune/vibestack/releases";
 const MIN_NODE = 26;
+
+export type ReleasePackage = "vibestack" | "vibestack-studio" | "create-vibestack";
+
+export function latestReleaseTarballUrl(pkg: ReleasePackage): string {
+  return `${GITHUB_RELEASES_BASE}/latest/download/${pkg}.tgz`;
+}
+
+export function versionedReleaseTarballUrl(pkg: ReleasePackage, version: string): string {
+  const bare = version.startsWith("v") ? version.slice(1) : version;
+  return `${GITHUB_RELEASES_BASE}/download/v${bare}/${pkg}-${bare}.tgz`;
+}
+
+export function resolveReleaseSpec(version?: string): string {
+  if (!version || version === "latest") return latestReleaseTarballUrl("vibestack");
+  if (/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+    return versionedReleaseTarballUrl("vibestack", version);
+  }
+  return version;
+}
 
 const VIBELANG_DEPS = ["effect", "@effect/platform-node", "vibelang-runtime"] as const;
 const VIBELANG_DEV_DEPS = ["vibelang", "vibelang-vite", "vite", "vitest", "@effect/vitest", "@types/node", "@antithesishq/bombadil"] as const;
@@ -531,10 +551,8 @@ export async function upgradeProject(root: string, options: UpgradeOptions = {})
     const local = resolveLocalPackage(root, options.from);
     localSourceDir = local.dir;
     bumped.push(...bumpVibestackSpec(root, local.spec, dryRun));
-  } else if (options.version) {
-    bumped.push(...bumpVibestackSpec(root, options.version, dryRun));
   } else {
-    bumped.push(...bumpVibestackSpec(root, "latest", dryRun));
+    bumped.push(...bumpVibestackSpec(root, resolveReleaseSpec(options.version), dryRun));
   }
 
   if (!dryRun && bumped.length > 0) {
