@@ -24,17 +24,18 @@ Website: https://vibestack.fun
 2. Scaffold a new project (or start from an example: `order`, `dashboard`, `fullstack`, `assistant`):
 
 ```bash
-pnpm create vibestack <project-name>
+pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/create-vibestack.tgz create-vibestack <project-name>
 # Or scaffold from a standalone example:
-pnpm create vibestack <project-name> --example order
+pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/create-vibestack.tgz create-vibestack <project-name> --example order
 ```
 
-3. Enter the project directory, verify/install the toolchain, and install dependencies:
+> Packages are installed from [GitHub Releases](https://github.com/lalalune/vibestack/releases) `.tgz` tarballs — do not run `pnpm add -D vibestack` or `pnpm create vibestack` against npm (the unscoped `vibestack` npm name belongs to an unrelated package).
+
+3. Enter the project directory and verify/install Dafny 4.11 if missing (`create-vibestack` already runs `pnpm install`, `vibestack init --yes`, and `vibestack doctor`):
 
 ```bash
 cd <project-name>
 pnpm exec vibestack doctor --install-dafny
-pnpm install
 ```
 
 4. Read `AGENTS.md` and `SPEC.md` in full, and follow the skills in `.agents/skills/` (`sync`, `shell`, `prove`, `design`).
@@ -61,7 +62,7 @@ pnpm check
 `vibestack init` is non-destructive and auto-detects `vibelang` vs. plain `typescript` mode:
 
 ```bash
-pnpm add -D vibestack
+pnpm add -D https://github.com/lalalune/vibestack/releases/latest/download/vibestack.tgz
 pnpm exec vibestack init
 pnpm exec vibestack doctor --install-dafny
 ```
@@ -95,11 +96,11 @@ Read `AGENTS.md` and `SPEC.md` in full after initializing or upgrading, fix any 
 Launch the self-contained Vibestack Studio GUI (stories, live layout preview, interactive state graph, checks, and sign-off) on any project with `spec/`:
 
 ```bash
-pnpm dlx vibestack-studio
+pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio
 # Or with npx:
-npx vibestack-studio
+npx --yes --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio
 # Or target a specific directory:
-pnpm dlx vibestack-studio ./path/to/project
+pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio ./path/to/project
 ```
 
 Inside a scaffolded Vibestack project, `pnpm dev` runs Vibestack Studio alongside your application's dev server, and `pnpm studio` opens Vibestack Studio alone.
@@ -110,11 +111,11 @@ Inside a scaffolded Vibestack project, `pnpm dev` runs Vibestack Studio alongsid
 
 | Command | Does |
 | --- | --- |
-| `pnpm create vibestack <name> [--example order\|dashboard\|fullstack\|assistant]` | Scaffolds a new Vibestack project or standalone example |
-| `pnpm add -D vibestack && pnpm exec vibestack init` | Non-destructively adds Vibestack to an existing repository |
+| `pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/create-vibestack.tgz create-vibestack <name> [--example order\|dashboard\|fullstack\|assistant]` | Scaffolds a new Vibestack project or standalone example |
+| `pnpm add -D https://github.com/lalalune/vibestack/releases/latest/download/vibestack.tgz && pnpm exec vibestack init` | Non-destructively adds Vibestack to an existing repository |
 | `pnpm vibestack upgrade` | Upgrades Vibestack, refreshes managed agent skills/docs, and aligns pins |
 | `pnpm exec vibestack doctor --install-dafny` | Checks Node 26+, pnpm, Dafny 4.11, Quint, Chromium, and installs Dafny 4.11 if missing |
-| `pnpm dlx vibestack-studio [<dir>]` | Launches standalone Vibestack Studio on any project with `spec/` |
+| `pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio [<dir>]` | Launches standalone Vibestack Studio on any project with `spec/` |
 | `pnpm dev` | Starts Vibestack Studio and every workspace app dev server together |
 | `pnpm check` | Generates core, simulates traces, runs Dafny/LemmaScript proofs, typechecks, runs tests, conformance, and Bombadil exploration |
 | `pnpm gen` | Regenerates `gen/` only |

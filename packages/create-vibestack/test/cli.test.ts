@@ -18,6 +18,16 @@ function readJson(filePath: string): unknown {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function expectDirectVibestackPin(target: string, expectedSpec: string): void {
+  const workspace = fs.readFileSync(path.join(target, "pnpm-workspace.yaml"), "utf8");
+  expect(workspace).not.toMatch(/^\s*vibestack:/m);
+  for (const rel of ["package.json", "apps/app/package.json", "packages/cli/package.json", "packages/ui/package.json", "packages/design-system/package.json"]) {
+    expect(readJson(path.join(target, rel))).toMatchObject({
+      devDependencies: { vibestack: expectedSpec },
+    });
+  }
+}
+
 afterEach(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -80,7 +90,20 @@ describe("create-vibestack CLI", () => {
     });
     expect(cliHelp).toContain("Usage: pnpm cli <command> [options]");
     expect(out).toContain("pnpm dev");
-    expect(out).toContain("pnpm dlx vibestack-studio");
+    expect(out).toContain("pnpm studio");
+  });
+
+  test("defaults vibestack dependency to the matching GitHub Release tarball URL", () => {
+    const cwd = makeTempDir();
+    execFileSync(
+      process.execPath,
+      [cliPath, "release-app", "--no-install"],
+      { cwd, encoding: "utf8" },
+    );
+    expectDirectVibestackPin(
+      path.join(cwd, "release-app"),
+      "https://github.com/lalalune/vibestack/releases/download/v0.2.0/vibestack-0.2.0.tgz",
+    );
   });
 
   test("rewrites catalog vibestack refs directly into manifests for file: version specs", () => {
@@ -90,16 +113,10 @@ describe("create-vibestack CLI", () => {
       [cliPath, "local-tarball-app", "--no-install", "--vibestack-version", "./vibestack-0.2.0.tgz"],
       { cwd, encoding: "utf8" },
     );
-    const target = path.join(cwd, "local-tarball-app");
-    const expectedSpec = `file:${path.join(cwd, "vibestack-0.2.0.tgz")}`;
-    const workspace = fs.readFileSync(path.join(target, "pnpm-workspace.yaml"), "utf8");
-
-    expect(workspace).not.toMatch(/^\s*vibestack:/m);
-    for (const rel of ["package.json", "apps/app/package.json", "packages/cli/package.json", "packages/ui/package.json", "packages/design-system/package.json"]) {
-      expect(readJson(path.join(target, rel))).toMatchObject({
-        devDependencies: { vibestack: expectedSpec },
-      });
-    }
+    expectDirectVibestackPin(
+      path.join(cwd, "local-tarball-app"),
+      `file:${path.join(cwd, "vibestack-0.2.0.tgz")}`,
+    );
   });
 
   test("writes vibestack.json when --mode is specified", () => {

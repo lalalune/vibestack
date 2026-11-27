@@ -8,9 +8,9 @@ Everything is built on [the stack](AGENTS.md#the-stack): Node 26, pnpm, VibeLang
 
 | Path | Holds |
 |---|---|
-| `packages/vibestack/` | the `vibestack` npm package (`vibestack` and `spec` CLIs, formal/testing/stories/design/eslint/chromium/config exports, and bundled agent assets) |
-| `packages/studio/` | the standalone `vibestack-studio` npm package (bundled Node server and prebuilt React UI, zero runtime dependencies) |
-| `packages/create-vibestack/` | the `create-vibestack` npm scaffolder (`pnpm create vibestack`), bundling `template/` |
+| `packages/vibestack/` | the `vibestack` package (`vibestack` and `spec` CLIs, formal/testing/stories/design/eslint/chromium/config exports, and bundled agent assets) |
+| `packages/studio/` | the standalone `vibestack-studio` package (bundled Node server and prebuilt React UI, zero runtime dependencies) |
+| `packages/create-vibestack/` | the `create-vibestack` project scaffolder, bundling `template/` |
 | `template/` | the clean starter workspace (`template/apps/app`, `template/packages/cli`, `template/packages/ui`, `template/packages/design-system`, `template/spec/`) |
 | `examples/` | standalone projects (`examples/order`, `examples/dashboard`, `examples/fullstack`, `examples/assistant`), each consuming `vibestack` as a package; never part of the workspace |
 | `selftest/` | tool self-tests (`selftest/selftest.ts`, `selftest/selftests/docs.ts`, `selftest/selftests/examples.ts`) and spec fixtures (`selftest/fixtures/`); never shipped downstream |
@@ -134,9 +134,10 @@ Set the matching `version` in `packages/vibestack/package.json`, `packages/studi
 `packages/create-vibestack/package.json`, merge to `main`, and push the tag `v<version>` from it.
 `.github/workflows/release.yml` verifies all three package versions match the tag, runs `pnpm build`,
 runs the remaining shard prerequisites and `pnpm selftest --only --concurrency=1` with the CI cache keys,
-packs tarballs for `vibestack`, `vibestack-studio`, and `create-vibestack`, publishes all three packages
-to npm with `--provenance --access public` (using OIDC trusted publishing via `id-token: write`), and
-attaches the `.tgz` tarballs to the GitHub Release for that tag.
+packs tarballs for `vibestack`, `vibestack-studio`, and `create-vibestack`, and attaches both versioned
+(`*-<version>.tgz`) and unversioned (`*.tgz`) tarballs to the GitHub Release for that tag so both pinned
+release URLs and `/releases/latest/download/*.tgz` URLs resolve cleanly.
+(The unscoped `vibestack` name on npm belongs to an unrelated package, so releases are distributed via GitHub Releases.)
 Projects install or adopt Vibestack as [README.md, "Add to an existing project"](README.md#add-to-an-existing-project) says.
 ## Architecture
 
@@ -432,7 +433,7 @@ configured scopes are in `knip.config.js`, `.madgerc`, `.jscpd.json` and
 |---|---|
 | Pull request or push to `main` | `verify` runs build, types, tests, browser tests, all checks, ESLint, Stylelint, Knip, Madge, jscpd and the docs and examples self-tests with up to four concurrent Turbo tasks on the four-core hosted runner and `--continue=dependencies-successful`. In parallel, `selftest-a`, `selftest-b` and `selftest-rest` run the three tool self-test tasks. |
 | Nightly | Every check fresh under the fixed nightly profile; saved counterexamples become a pull request into the branch the run checked, or the default branch for a tag run. Beside it, the three `selftest:tools` tasks without the selftest's shared tool runs |
-| A `v*` tag (`release.yml`) | Version check across `packages/vibestack`, `packages/studio`, and `packages/create-vibestack`, `pnpm build`, the prerequisites and `pnpm selftest --only --concurrency=1` read from the shared cache, npm OIDC publish of all three packages, and `.tgz` tarballs attached to a GitHub release |
+| A `v*` tag (`release.yml`) | Version check across `packages/vibestack`, `packages/studio`, and `packages/create-vibestack`, `pnpm build`, the prerequisites and `pnpm selftest --only --concurrency=1` read from the shared cache, and versioned plus unversioned `.tgz` tarballs attached to a GitHub release |
 
 This repository runs its root specs in the ordinary check. Consumer
 workflows can reuse `lalalune/vibestack/.github/actions/setup@vX` and invoke

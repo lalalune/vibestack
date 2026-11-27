@@ -14,6 +14,7 @@ import { findBin, onPath, startAttached } from "./run.ts";
 import { simulation, type Simulation } from "./simulate.ts";
 import { profile, type TestProfile } from "./testing/profile.ts";
 import { generated, mirrorGen, typecheckAll } from "./units.ts";
+import { latestReleaseTarballUrl } from "./upgrade.ts";
 import { allDone, codeDirs, packageScripts, type Reported } from "./util.ts";
 import type { Model } from "./gen.ts";
 import type { Spec } from "./parse.ts";
@@ -376,10 +377,11 @@ export function launchStudio(root: string, args: string[]) {
     return;
   }
 
+  const studioPkg = latestReleaseTarballUrl("vibestack-studio");
   if (onPath("pnpm")) {
-    attachAndPropagateExit("pnpm", ["dlx", "vibestack-studio@latest", ...args], root, "studio");
+    attachAndPropagateExit("pnpm", ["dlx", `--package=${studioPkg}`, "vibestack-studio", ...args], root, "studio");
   } else {
-    attachAndPropagateExit("npx", ["--yes", "vibestack-studio@latest", ...args], root, "studio");
+    attachAndPropagateExit("npx", ["--yes", `--package=${studioPkg}`, "vibestack-studio", ...args], root, "studio");
   }
 }
 
@@ -407,9 +409,10 @@ export function launchCreate(root: string, args: string[]) {
     return;
   }
 
+  const createPkg = latestReleaseTarballUrl("create-vibestack");
   if (onPath("pnpm")) {
-    attachAndPropagateExit("pnpm", ["dlx", "create-vibestack@latest", ...args], root, "create-vibestack");
+    attachAndPropagateExit("pnpm", ["dlx", `--package=${createPkg}`, "create-vibestack", ...args], root, "create-vibestack");
   } else {
-    attachAndPropagateExit("npx", ["--yes", "create-vibestack@latest", ...args], root, "create-vibestack");
+    attachAndPropagateExit("npx", ["--yes", `--package=${createPkg}`, "create-vibestack", ...args], root, "create-vibestack");
   }
 }

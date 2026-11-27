@@ -6,6 +6,13 @@ import path from "node:path";
 
 const EXAMPLES = ["order", "dashboard", "fullstack", "assistant"] as const;
 const MODES = ["vibelang", "typescript", "specs-only"] as const;
+const GITHUB_RELEASES_BASE = "https://github.com/lalalune/vibestack/releases";
+const STUDIO_LATEST_URL = `${GITHUB_RELEASES_BASE}/latest/download/vibestack-studio.tgz`;
+const VIBESTACK_LATEST_URL = `${GITHUB_RELEASES_BASE}/latest/download/vibestack.tgz`;
+
+function defaultVibestackSpec(version: string): string {
+  return `${GITHUB_RELEASES_BASE}/download/v${version}/vibestack-${version}.tgz`;
+}
 
 type ExampleName = (typeof EXAMPLES)[number];
 type ProjectMode = (typeof MODES)[number];
@@ -91,6 +98,9 @@ function sanitizeProjectName(raw: string): string {
 }
 
 function normalizeVersionSpec(raw: string, cwd: string): string {
+  if (raw === "latest") {
+    return VIBESTACK_LATEST_URL;
+  }
   if (raw.startsWith("file:")) {
     const rest = raw.slice("file:".length);
     return path.isAbsolute(rest) ? raw : `file:${path.resolve(cwd, rest)}`;
@@ -131,7 +141,7 @@ function parseArgs(argv: readonly string[], cwd: string, defaultVersion: string)
   let source: ProjectSource = { kind: "template" };
   let mode: ProjectMode | undefined;
   let install = true;
-  let vibestackVersion = `^${defaultVersion}`;
+  let vibestackVersion = defaultVibestackSpec(defaultVersion);
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -408,9 +418,12 @@ function printNextSteps(command: Extract<CliCommand, { kind: "create" }>): void 
   }
   if (command.source.kind === "template") {
     lines.push("  pnpm dev");
+    lines.push("  pnpm check");
+    lines.push("  pnpm studio");
+  } else {
+    lines.push("  pnpm check");
+    lines.push(`  pnpm dlx --package=${STUDIO_LATEST_URL} vibestack-studio`);
   }
-  lines.push("  pnpm check");
-  lines.push("  pnpm dlx vibestack-studio");
   lines.push("");
   process.stdout.write(lines.join("\n"));
 }
