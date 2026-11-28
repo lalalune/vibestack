@@ -9,7 +9,7 @@ import { STACK_IMPORT_PATTERNS, vibestackConfig } from "./packages/vibestack/src
 
 const monorepo = 'CONTRIBUTING.md, "The monorepo"'
 const noReact = { patterns: [...STACK_IMPORT_PATTERNS, { regex: "^react(?:-dom)?(?:/|$)", message: `Tool and domain code does not import React: ${monorepo}.` }] }
-const untyped = ["*.{js,ts}", "template/*.{js,ts}", "packages/*/scripts/**", "packages/vibestack/bin/**", "packages/vibestack/vitest.config.ts", "packages/create-vibestack/vitest.config.ts", "**/.storybook/**", "template/packages/design-system/**", "packages/vibestack/src/design/test/**", "packages/vibestack/src/stories/test/**"]
+const untyped = ["*.{js,ts}", "template/*.{js,ts}", "**/alchemy.run.ts", "**/deploy/**", "packages/*/scripts/**", "packages/vibestack/bin/**", "packages/vibestack/vitest.config.ts", "packages/create-vibestack/vitest.config.ts", "**/.storybook/**", "template/packages/design-system/**", "packages/vibestack/src/design/test/**", "packages/vibestack/src/stories/test/**"]
 const tsx = ["apps/**/*.{ts,tsx}", "template/packages/ui/**/*.{ts,tsx}", "template/apps/**/*.{ts,tsx}", "packages/studio/src/page/**/*.{ts,tsx}"]
 const own = ["apps/**", "template/apps/**", "template/packages/**"]
 const commented = {
