@@ -4,7 +4,7 @@ import path from "node:path";
 import { loadConfig, type VibestackConfig, type VibestackMode } from "./config.ts";
 import { doctor, formatDoctorReport, type DoctorReport } from "./doctor.ts";
 import { exec, writeWhole } from "./run.ts";
-import { GENERATED_AGENT_IGNORES, linkProjectAgents, resolvePackageAssets, setupProjectAgents, SKILL_ROOT, type PackageAssets } from "./skill-links.ts";
+import { GENERATED_AGENT_IGNORES, linkProjectAgents, resolvePackageAssets, setupProjectAgents, SKILL_ROOT, TOOL_IGNORE_DIRS, type PackageAssets } from "./skill-links.ts";
 import { VITEST_CONFIG } from "./testing/check.ts";
 
 export { linkProjectAgents as linkAgents };
@@ -36,14 +36,8 @@ const VIBELANG_DEPS = ["effect", "@effect/platform-node", "vibelang-runtime"] as
 const VIBELANG_DEV_DEPS = ["vibelang", "vibelang-vite", "vite", "vitest", "@effect/vitest", "@types/node", "@antithesishq/bombadil"] as const;
 const ALIGNED_PINS = ["effect", "@effect/platform-node", "@effect/vitest", "@antithesishq/bombadil", "vibelang", "vibelang-runtime", "vibelang-vite", "vite", "vitest"] as const;
 
-const GITIGNORE_ENTRIES = [
-  "gen/",
-  ".spec-cache/",
-  ".studio/",
-  "dist/",
-  ".vibe/",
-  ".cache/",
-  ".turbo/",
+export const GITIGNORE_ENTRIES = [
+  ...TOOL_IGNORE_DIRS.map((dir) => `${dir}/`),
   "test/__traces__/",
   ...GENERATED_AGENT_IGNORES,
 ];

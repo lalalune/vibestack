@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "apps/site/**"
+      - "packages/vibestack/src/alchemy.ts"
       - "template/packages/design-system/**"
       - "template/packages/ui/**"
       - "pnpm-lock.yaml"
@@ -14,6 +15,7 @@ on:
     branches: [main]
     paths:
       - "apps/site/**"
+      - "packages/vibestack/src/alchemy.ts"
       - "template/packages/design-system/**"
       - "template/packages/ui/**"
       - "pnpm-lock.yaml"
@@ -31,6 +33,7 @@ permissions:
 
 env:
   TURBO_TELEMETRY_DISABLED: "1"
+  ALCHEMY_FAST_DISTILLED: "1"
 
 jobs:
   deploy:
@@ -41,9 +44,24 @@ jobs:
         with:
           job: deploy-site
           verification: "false"
-      - name: Typecheck and build marketing site
-        run: pnpm turbo run typecheck build --filter=@repo/site
-      - name: Deploy to Cloudflare Pages
+      - name: Build vibestack toolchain and marketing site
+        run: pnpm turbo run build typecheck --filter=@repo/site...
+      - name: Verify marketing site in offline workerd
+        run: pnpm --filter @repo/site test:deploy
+      - name: Restore Alchemy local state cache
+        if: >-
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository) &&
+          vars.ALCHEMY_STATE_STORE != 'cloudflare' &&
+          vars.R2_STATE_BUCKET == ''
+        uses: actions/cache/restore@v6
+        with:
+          path: apps/site/.alchemy/state
+          key: alchemy-state-site-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'production' }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            alchemy-state-site-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'production' }}-
+      - name: Deploy marketing site via Alchemy
+        id: alchemy-deploy
         if: >-
           github.event_name != 'pull_request' ||
           github.event.pull_request.head.repo.full_name == github.repository
@@ -51,18 +69,31 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID || '50ad2052bbc6ca528d6993a689b419a4' }}
-          DEPLOY_BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
+          ALCHEMY_STATE_STORE: ${{ vars.ALCHEMY_STATE_STORE || '' }}
+          R2_STATE_BUCKET: ${{ vars.R2_STATE_BUCKET || '' }}
+          R2_STATE_PREFIX: ${{ vars.R2_STATE_PREFIX || '' }}
+          R2_STATE_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+          R2_STATE_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
+          SITE_DOMAIN: ${{ vars.SITE_DOMAIN || '' }}
+          STAGE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'production' }}
         run: |
           if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
             if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-              echo "::notice::Skipping Cloudflare Pages preview deploy because CLOUDFLARE_API_TOKEN is not configured."
+              echo "::notice::Skipping Alchemy preview deploy because CLOUDFLARE_API_TOKEN is not configured."
               exit 0
             fi
-            echo "::error::CLOUDFLARE_API_TOKEN secret is required to deploy vibestack.fun to Cloudflare Pages."
+            echo "::error::CLOUDFLARE_API_TOKEN secret is required to deploy apps/site via Alchemy."
             exit 1
           fi
-          pnpm dlx wrangler pages deploy dist \
-            --project-name=vibestack-fun \
-            --branch="$DEPLOY_BRANCH" \
-            --commit-hash="$GITHUB_SHA" \
-            --commit-dirty=true
+          pnpm exec alchemy --fast-distilled deploy --stage "$STAGE" --adopt --yes --no-input
+          echo "deployed=true" >> "$GITHUB_OUTPUT"
+      - name: Save Alchemy local state cache
+        if: >-
+          steps.alchemy-deploy.outputs.deployed == 'true' &&
+          vars.ALCHEMY_STATE_STORE != 'cloudflare' &&
+          vars.R2_STATE_BUCKET == ''
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: apps/site/.alchemy/state
+          key: alchemy-state-site-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'production' }}-${{ github.sha }}-${{ github.run_attempt }}

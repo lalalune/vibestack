@@ -72,6 +72,7 @@ flowchart LR
 | Generated core | `gen/<name>.ts`, `gen/<name>.effect.vibe` (`Machine`), `gen/<name>.react.ts` | `replay`, `proof` (Dafny + LemmaScript) |
 | Shell | HTTP, storage, queues, I/O in VibeLang on Effect 4 (or plain TS in `typescript` mode) | `types` (`vibelang` / `tsc`) |
 | Interface | React, Vite, Tailwind v4, shadcn/ui on Radix, `@repo/design-system` tokens | `types`, ESLint token rules, Storybook |
+| Deployment | Alchemy v2 (`alchemy.run`) on Cloudflare Workers, Static Assets, and SQLite Durable Objects | `pnpm test:deploy` (`workerd`), post-deploy `Alchemy.Action` |
 | Tests | Vitest + Playwright journeys, spec conformance drivers, Bombadil page exploration | `tests`, `traces`, `explore` |
 
 Agents follow [AGENTS.md](AGENTS.md), [SPEC.md](SPEC.md), and [`.agents/skills/`](.agents/skills/), iterating on `pnpm check` until only your sign-off (`pnpm accept`) remains. See [CONTRIBUTING.md](CONTRIBUTING.md#architecture) for caching, test policy, and CI details.
@@ -139,6 +140,9 @@ Configure Vibestack in an optional root `vibestack.json` (or under `"vibestack"`
 | `pnpm exec vibestack doctor [--install-dafny]` | Checks Node 26+, pnpm, Dafny 4.11, Quint, Chromium, and installs Dafny 4.11 if missing |
 | `pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio [<dir>]` | Launches standalone Vibestack Studio on any project with `spec/` |
 | `pnpm dev` | Starts Vibestack Studio and every workspace package's `dev` script together |
+| `pnpm dev:cf` | Starts local Cloudflare `workerd` runtime via Alchemy (`ALCHEMY_FAST_DISTILLED=1 alchemy dev`) in scaffolded apps and examples |
+| `pnpm deploy` / `pnpm deploy:plan` | Plans or deploys Cloudflare infrastructure via `pnpm cli deploy` and verifies live endpoints |
+| `pnpm test:deploy` | Verifies built Workers and static assets inside offline local `workerd` |
 | `pnpm check [<dir>] [--json] [--timings]` | Runs generation, simulation, proofs, types, tests, conformance, and exploration |
 | `pnpm gen [<dir>]` | Generates `gen/` only |
 | `pnpm accept [<dir>]` | User sign-off: checks afresh and records reviewed rules in `spec/lock.json` |

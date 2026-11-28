@@ -11,11 +11,19 @@
     "gen": "spec gen",
     "accept": "spec accept",
     "build": "vibelang",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:cf": "ALCHEMY_FAST_DISTILLED=1 alchemy dev",
+    "deploy": "ALCHEMY_FAST_DISTILLED=1 alchemy deploy --yes --no-input",
+    "deploy:plan": "ALCHEMY_FAST_DISTILLED=1 alchemy plan",
+    "test:deploy": "vitest run -c deploy/vitest.config.ts"
   },
   "devDependencies": {
-    "@types/node": "^26.0.0",
+    "@alchemy.run/cloudflare": "2.0.0-beta.85",
+    "@alchemy.run/test": "2.0.0-beta.85",
+    "@cloudflare/workers-types": "^4.20260429.1",
     "@effect/vitest": "4.1.1",
+    "@types/node": "^26.0.0",
+    "alchemy": "2.0.0-beta.85",
     "vibelang": "0.0.13",
     "vibelang-vite": "0.0.13",
     "vibestack": "file:../../packages/vibestack",

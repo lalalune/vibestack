@@ -31,6 +31,16 @@
       "dependsOn": ["gen", "//#gen", "^build"],
       "outputs": []
     },
+    "test:deploy": {
+      "dependsOn": ["build", "typecheck"],
+      "outputs": [],
+      "env": ["ALCHEMY_DEV", "ALCHEMY_TEST_DEV", "ALCHEMY_TEST_STAGE"]
+    },
+    "deploy": {
+      "dependsOn": ["build", "typecheck", "test"],
+      "cache": false,
+      "passThroughEnv": ["CLOUDFLARE_*", "ALCHEMY_*", "CI", "USER"]
+    },
     "check": {
       "dependsOn": ["build", "typecheck", "test", "test:browser"],
       "cache": false
@@ -42,12 +52,12 @@
     },
     "//#typecheck": {
       "dependsOn": ["//#gen"],
-      "inputs": ["package.json", "tsconfig.json", "spec/**", "src/**", "test/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**", "!**/.DS_Store", "!**/*.{md,dfy,qnt}"],
+      "inputs": ["package.json", "tsconfig.json", "spec/**", "src/**", "test/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,.alchemy,.wrangler,generated,storybook-static}/**", "!**/.DS_Store", "!**/*.{md,dfy,qnt}"],
       "outputs": []
     },
     "//#test": {
       "dependsOn": ["//#gen", "^build"],
-      "inputs": ["package.json", "vitest.config.ts", "spec/**", "!spec/**/*.md", "src/**", "test/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**", "!**/.DS_Store"],
+      "inputs": ["package.json", "vitest.config.ts", "spec/**", "!spec/**/*.md", "src/**", "test/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,.alchemy,.wrangler,generated,storybook-static}/**", "!**/.DS_Store"],
       "outputs": [".cache/test-result-*.json"]
     },
     "//#check": {
@@ -56,11 +66,11 @@
     },
     "//#lint:js": {
       "dependsOn": ["@repo/design-system#build", "@repo/app#typecheck"],
-      "inputs": ["src/**", "test/**", "apps/**", "packages/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**", "!**/.DS_Store", "!**/*.{md,dfy,qnt}", "!**/spec/**", "!{apps,packages}/**/gen/**", "package.json", "pnpm-workspace.yaml", "tsconfig.json", "*.config.js", "*.config.ts"],
+      "inputs": ["src/**", "test/**", "apps/**", "packages/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,.alchemy,.wrangler,generated,storybook-static}/**", "!**/.DS_Store", "!**/*.{md,dfy,qnt}", "!**/spec/**", "!{apps,packages}/**/gen/**", "package.json", "pnpm-workspace.yaml", "tsconfig.json", "*.config.js", "*.config.ts"],
       "outputs": []
     },
     "//#lint:css": {
-      "inputs": ["**/*.css", "!.claude/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,generated,storybook-static}/**", "!**/.DS_Store", "!{apps,packages}/**/gen/**", "stylelint.config.js", "package.json", "pnpm-workspace.yaml"],
+      "inputs": ["**/*.css", "!.claude/**", "!**/{node_modules,dist,.vibe,.cache,.spec-cache,.turbo,.alchemy,.wrangler,generated,storybook-static}/**", "!**/.DS_Store", "!{apps,packages}/**/gen/**", "stylelint.config.js", "package.json", "pnpm-workspace.yaml"],
       "outputs": []
     },
     "dev": {

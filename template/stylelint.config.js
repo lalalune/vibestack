@@ -7,6 +7,8 @@ export default {
     "**/dist/**",
     "**/.cache/**",
     "**/.spec-cache/**",
+    "**/.alchemy/**",
+    "**/.wrangler/**",
     "**/generated/**",
     "**/storybook-static/**",
   ],

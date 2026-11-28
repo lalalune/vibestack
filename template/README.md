@@ -18,6 +18,9 @@ pnpm dev
 | Command | Does |
 | --- | --- |
 | `pnpm dev` | Runs the app and launches Vibestack Studio |
+| `pnpm dev:cf` | Runs the app locally inside Cloudflare `workerd` via Alchemy (`alchemy dev`) |
+| `pnpm deploy` / `pnpm deploy:plan` | Deploys or previews Cloudflare infrastructure via `pnpm cli deploy` |
+| `pnpm test:deploy` | Verifies the built app inside offline local `workerd` |
 | `pnpm studio` | Opens Vibestack Studio |
 | `pnpm cli <command>` | Runs project CLI subcommands (`pnpm cli --help` lists commands; pass `--json` for structured output) |
 | `pnpm check` | Runs the full verification pipeline: model, simulation, proofs, types, tests, traces, explore, review |
@@ -34,6 +37,7 @@ pnpm dev
 | Path | Role |
 | --- | --- |
 | `spec/` | Stories, rules, and Quint models (`spec/index.md` is the entry point) |
+| `alchemy.run.ts` | Alchemy v2 Cloudflare deployment stack and post-deploy verification |
 | `apps/app/` | Starter React + VibeLang application wired to `spec/app/` |
 | `packages/cli/` | Project CLI (`pnpm cli <command>`) for verification, inspection, and operational subcommands |
 | `packages/design-system/` | Design tokens (`tokens.json`) and generated CSS theme |

@@ -38,7 +38,7 @@ cd <project-name>
 pnpm exec vibestack doctor --install-dafny
 ```
 
-4. Read `AGENTS.md` and `SPEC.md` in full, and follow the skills in `.agents/skills/` (`sync`, `shell`, `prove`, `design`).
+4. Read `AGENTS.md` and `SPEC.md` in full, and follow the skills in `.agents/skills/` (`sync`, `shell`, `prove`, `design`, `alchemy`).
 5. Write the product overview in `spec/index.md` and the application's stories, rules, and Quint models in `spec/app/index.md` (use `pnpm new <name>` for additional spec areas).
 6. Build the application in `apps/app`:
    - Shell effects and I/O in VibeLang (`src/*.vibe`) over the generated `gen/<name>.effect.vibe` `Machine` service.
@@ -117,6 +117,9 @@ Inside a scaffolded Vibestack project, `pnpm dev` runs Vibestack Studio alongsid
 | `pnpm exec vibestack doctor --install-dafny` | Checks Node 26+, pnpm, Dafny 4.11, Quint, Chromium, and installs Dafny 4.11 if missing |
 | `pnpm dlx --package=https://github.com/lalalune/vibestack/releases/latest/download/vibestack-studio.tgz vibestack-studio [<dir>]` | Launches standalone Vibestack Studio on any project with `spec/` |
 | `pnpm dev` | Starts Vibestack Studio and every workspace app dev server together |
+| `pnpm dev:cf` | Runs the app locally inside Cloudflare `workerd` via Alchemy (`alchemy dev`) |
+| `pnpm deploy` / `pnpm deploy:plan` | Plans or deploys Cloudflare infrastructure via Alchemy (`pnpm cli deploy`) |
+| `pnpm test:deploy` | Verifies built Workers and static assets inside offline local `workerd` |
 | `pnpm check` | Generates core, simulates traces, runs Dafny/LemmaScript proofs, typechecks, runs tests, conformance, and Bombadil exploration |
 | `pnpm gen` | Regenerates `gen/` only |
 | `pnpm accept` | User sign-off: checks afresh and records reviewed rules in `spec/lock.json` |

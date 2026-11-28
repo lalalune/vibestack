@@ -92,6 +92,10 @@
     "vitest": "5.1.0"
   },
   "exports": {
+    "./alchemy": {
+      "types": "./dist/alchemy.d.ts",
+      "default": "./dist/alchemy.js"
+    },
     "./formal": {
       "types": "./dist/formal.d.ts",
       "default": "./dist/formal.js"
@@ -149,6 +153,10 @@
       "spec": "./dist/spec.js"
     },
     "exports": {
+      "./alchemy": {
+        "types": "./dist/alchemy.d.ts",
+        "default": "./dist/alchemy.js"
+      },
       "./formal": {
         "types": "./dist/formal.d.ts",
         "default": "./dist/formal.js"

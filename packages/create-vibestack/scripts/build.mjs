@@ -19,6 +19,8 @@ const EXCLUDED_ENTRIES = new Set([
   ".lemmascript",
   "_apalache-out",
   "__traces__",
+  ".alchemy",
+  ".wrangler",
 ]);
 
 function syncDirectory(srcDir, destDir, options = {}) {

@@ -3,3 +3,5 @@
 # `pnpm tokens` and `pnpm stories` write these; `storybook build` the last.
 generated/
 storybook-static/
+.alchemy/
+.wrangler/

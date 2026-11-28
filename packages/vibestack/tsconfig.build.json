@@ -19,6 +19,7 @@
     ]
   },
   "include": [
+    "src/alchemy.ts",
     "src/spec.ts",
     "src/formal.ts",
     "src/simulator.ts",
