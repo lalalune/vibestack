@@ -31,13 +31,13 @@ Vibestack uses **Alchemy v2** (`alchemy@2.0.0-beta.85` + `@alchemy.run/cloudflar
 | Single-writer spec-backed `Machine` | **SQLite Durable Object** (`Cloudflare.Workers.DurableObject` / Worker export): serialize transitions in DO storage, validate stored state with `decodeState` on wake, persist before answering |
 | React + Vite 8 + VibeLang SPA (local dev) | `Cloudflare.Website.Vite("App", { rootDir, assets: { notFoundHandling: "single-page-application" } })` — composes with `vibelang-vite`, `@vitejs/plugin-react`, and `@tailwindcss/vite` |
 | Prebuilt Turbo SPA / Worker (CI, zero double-build) | `Cloudflare.Worker` with `bundle: false` (prebuilt ESM) and `assets: { ...hashAssetDirectory(distDir), notFoundHandling: "single-page-application", runWorkerFirst: ["/api/*"] }` |
-| Existing external Postgres pool | `Cloudflare.Hyperdrive.lookup` (read-only data source in `2.0.0-beta.85`) or `Cloudflare.Hyperdrive.Connection` with `.pipe(Alchemy.AdoptPolicy.adopt(true))`, supplying `dev` origin for local `alchemy dev` since Cloudflare never returns origin passwords |
+| Existing external Postgres pool | `createHyperdriveRef` from `vibestack/alchemy` when binding an existing Hyperdrive ID with Wrangler-scoped tokens (zero `Hyperdrive:Read` API calls), `Cloudflare.Hyperdrive.lookup` when the token has `Account > Hyperdrive:Read`, or `Cloudflare.Hyperdrive.Connection` with `.pipe(Alchemy.AdoptPolicy.adopt(true))`, supplying `dev` origin for local `alchemy dev` since Cloudflare never returns origin passwords |
 | Post-deploy verification gate | `Alchemy.Action` calling `verifyDeploymentEndpoints` from `vibestack/alchemy`, returning a typed `DeploymentReceipt` |
 | Operational deploy lever | `pnpm cli deploy [--stage <name>] [--dry-run] [--verify] [--destroy] [--json]` (`packages/cli/src/commands/deploy.ts`) |
 
 ## Helpers in `vibestack/alchemy`
 
-`packages/vibestack/src/alchemy.ts` (imported as `vibestack/alchemy`) is a zero-dependency Node 26 module providing four composable primitives:
+`packages/vibestack/src/alchemy.ts` (imported as `vibestack/alchemy`) is a zero-dependency Node 26 module providing five composable primitives:
 
 1. **`resolveStage` & `assertStageGuard`**:
    - Discriminated `StageTarget` (`dev`, `test`, `preview`, `staging`, `production`).
@@ -46,9 +46,11 @@ Vibestack uses **Alchemy v2** (`alchemy@2.0.0-beta.85` + `@alchemy.run/cloudflar
 2. **`hashAssetDirectory(dir)`**:
    - Deterministically SHA-256 hashes a Turbo-built `dist/` directory and returns `{ directory, path, hash, fileCount, totalBytes }` so `Cloudflare.Worker` skips re-hashing and re-uploading unchanged assets.
 3. **`verifyDeploymentEndpoints(baseUrl, endpoints, options)`**:
-   - Bounded exponential-retry HTTP verifier handling Cloudflare edge propagation (`404`/5xx cold-start windows), checking status codes, headers, body substrings, JSON predicates, and optional commit SHA headers/fields, returning a typed `DeploymentReceipt`.
+   - Bounded exponential-retry HTTP verifier handling Cloudflare edge propagation (`404`/5xx cold-start windows and stale commit SHA propagation), supporting `redirect` control (e.g. `redirect: "manual"` for 301 checks), per-check `timeoutMs` overrides (e.g. `90_000` for slow cron/LLM smoke probes), headers, body substrings, JSON predicates, and optional commit SHA headers/fields, returning a typed `DeploymentReceipt`. Retry timers stay ref'd so Node 26 top-level `await` CLIs never exit prematurely with code 13.
 4. **`makeR2BucketObjects(config, adapter)` & `createR2BucketClient(config)`**:
    - Zero-dep Node 26 R2 object client supporting both S3-compatible SigV4 (`kind: "s3"`, ideal for existing `R2_STATE_ACCESS_KEY_ID` / `R2_STATE_SECRET_ACCESS_KEY` credentials) and Cloudflare R2 REST API (`kind: "api"`). Plugs directly into `alchemy/State/BucketState`'s `makeBucketState` when CI tokens lack `Secrets Store Write`.
+5. **`createHyperdriveRef({ id, hyperdriveId, accountId, dev, asOutput: Output.asOutput, isConnectionLookup: Cloudflare.Hyperdrive.isConnectionLookup })`**:
+   - Builds a validated `Cloudflare.Hyperdrive.ConnectionLookup` binding for an existing Hyperdrive ID without calling `GET /accounts/{accountId}/hyperdrive/configs/{id}`. Use this when CI `CLOUDFLARE_API_TOKEN` is Wrangler-scoped (`Workers Scripts:Edit`, `Workers Routes:Edit`, `R2 Storage:Edit`, `Zone:Read`) and lacks `Account > Hyperdrive:Read`, while preserving local `dev` origin support for `alchemy dev` and `workerd` tests.
 
 ## State stores & safe adoption
 

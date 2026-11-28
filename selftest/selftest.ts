@@ -35,7 +35,7 @@ import { conformance as checkTraces, conformanceFound } from "../packages/vibest
 import { explore, explored, pageInputs } from "../packages/vibestack/src/explore.ts";
 import { harnessFiles, search, simulate, simulation } from "../packages/vibestack/src/simulate.ts";
 import { acceptContracts, acceptReviews, NODE, check, checkVerifiedSource, danglingCitations, expandListHelpers, generated, init, parseSpec, pending, pendingContracts, readSpecs, replay, show, typecheckAll, type Result, type Spec } from "../packages/vibestack/src/pipeline.ts";
-import { assertStageGuard, createR2BucketClient, hashAssetDirectory, makeR2BucketObjects, resolveStage, StageGuardError, verifyDeploymentEndpoints } from "../packages/vibestack/src/alchemy.ts";
+import { assertStageGuard, createHyperdriveRef, createR2BucketClient, hashAssetDirectory, HYPERDRIVE_LOOKUP_TYPE_ID, makeR2BucketObjects, resolveStage, StageGuardError, verifyDeploymentEndpoints } from "../packages/vibestack/src/alchemy.ts";
 import { checkAlchemy } from "../packages/vibestack/src/doctor.ts";
 import { GITIGNORE_ENTRIES } from "../packages/vibestack/src/upgrade.ts";
 
@@ -5811,18 +5811,31 @@ test("alchemy helpers, R2 state client, gitignore entries, and doctor preflight"
   assert.notEqual(hashAssetDirectory(assetRoot).hash, hashed1.hash);
 
   let verifyAttempts = 0;
+  let seenRedirect: RequestRedirect | undefined;
   const verified = await verifyDeploymentEndpoints(
     "https://example.test",
     [
-      { path: "/health", expectedStatus: 200, expectedCommitSha: "abc1234", expectJson: (v) => typeof v === "object" && v !== null && (v as { ok?: boolean }).ok === true },
+      { path: "/health", expectedStatus: 200, expectedCommitSha: "abc1234", timeoutMs: 25_000, expectJson: (v) => typeof v === "object" && v !== null && (v as { ok?: boolean }).ok === true },
+      { path: "/old", redirect: "manual", expectedStatus: 301, expectedHeaders: { location: /\/new$/ } },
     ],
     {
       maxAttempts: 3,
       initialDelayMs: 0,
       sleep: () => Promise.resolve(),
-      fetch: () => {
+      fetch: (input, init) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.endsWith("/old")) {
+          seenRedirect = init?.redirect;
+          return Promise.resolve(new Response(null, { status: 301, headers: { location: "/new" } }));
+        }
         verifyAttempts += 1;
         if (verifyAttempts === 1) return Promise.resolve(new Response("warming", { status: 503 }));
+        if (verifyAttempts === 2) {
+          return Promise.resolve(new Response(JSON.stringify({ ok: true, commitSha: "stale000" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }));
+        }
         return Promise.resolve(new Response(JSON.stringify({ ok: true, commitSha: "abc1234deadbeef" }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -5831,7 +5844,67 @@ test("alchemy helpers, R2 state client, gitignore entries, and doctor preflight"
     },
   );
   assert.equal(verified.ok, true);
-  assert.equal(verifyAttempts, 2);
+  assert.equal(verifyAttempts, 3);
+  assert.equal(seenRedirect, "manual");
+
+  const tlaRetry = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import { verifyDeploymentEndpoints } from ${JSON.stringify(pathToFileURL(path.join(project, "packages/vibestack/src/alchemy.ts")).href)};
+let n = 0;
+const receipt = await verifyDeploymentEndpoints("https://example.test", [{ path: "/health", timeoutMs: 5000 }], {
+  maxAttempts: 2,
+  initialDelayMs: 25,
+  fetch: () => Promise.resolve(new Response(n++ === 0 ? "busy" : "ok", { status: n === 1 ? 503 : 200 })),
+});
+console.log(JSON.stringify({ ok: receipt.ok, attempts: receipt.probes[0]?.attempts }));`,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(tlaRetry.status, 0, `top-level await retry exited ${String(tlaRetry.status)}: ${tlaRetry.stderr}`);
+  assert.deepEqual(JSON.parse(tlaRetry.stdout.trim()), { ok: true, attempts: 2 });
+
+  interface FakeHyperdriveLookup {
+    readonly [HYPERDRIVE_LOOKUP_TYPE_ID]: true;
+    readonly Type: "Cloudflare.Hyperdrive";
+    readonly LogicalId: string;
+    readonly hyperdriveId: { readonly value: string };
+    readonly name: { readonly value: string };
+    readonly accountId: { readonly value: string };
+    readonly dev: { readonly value: unknown };
+  }
+  const isFakeHyperdriveLookup = (value: unknown): value is FakeHyperdriveLookup =>
+    typeof value === "object" && value !== null && HYPERDRIVE_LOOKUP_TYPE_ID in value;
+  const hdRef = createHyperdriveRef({
+    id: "AppDb",
+    hyperdriveId: "hd-123",
+    accountId: "acct-456",
+    dev: { host: "127.0.0.1", port: 5432 },
+    asOutput: (value) => ({ value }),
+    isConnectionLookup: isFakeHyperdriveLookup,
+  });
+  assert.equal(hdRef.Type, "Cloudflare.Hyperdrive");
+  assert.equal(hdRef.LogicalId, "AppDb");
+  assert.deepEqual(hdRef.hyperdriveId, { value: "hd-123" });
+  assert.deepEqual(hdRef.accountId, { value: "acct-456" });
+  assert.throws(() =>
+    createHyperdriveRef({
+      id: "AppDb",
+      hyperdriveId: "   ",
+      asOutput: (value) => ({ value }),
+      isConnectionLookup: isFakeHyperdriveLookup,
+    }),
+  );
+  assert.throws(() =>
+    createHyperdriveRef({
+      id: "AppDb",
+      hyperdriveId: "hd-123",
+      asOutput: (value) => ({ value }),
+      isConnectionLookup: (_value: unknown): _value is FakeHyperdriveLookup => false,
+    }),
+  );
 
   const shaMismatch = await verifyDeploymentEndpoints(
     "https://example.test",
