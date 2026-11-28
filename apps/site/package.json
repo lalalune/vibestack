@@ -8,7 +8,7 @@
     "dev:cf": "ALCHEMY_FAST_DISTILLED=1 alchemy dev",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p deploy/tsconfig.json",
     "deploy": "ALCHEMY_FAST_DISTILLED=1 alchemy deploy --yes --no-input",
     "deploy:plan": "ALCHEMY_FAST_DISTILLED=1 alchemy plan",
     "test:deploy": "vitest run -c deploy/vitest.config.ts"

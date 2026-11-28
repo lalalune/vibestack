@@ -8,15 +8,12 @@
       "dom.iterable"
     ],
     "types": [
-      "node",
       "vite/client"
     ],
     "rootDir": "."
   },
   "include": [
     "src",
-    "deploy",
-    "alchemy.run.ts",
     "vite.config.ts"
   ]
 }

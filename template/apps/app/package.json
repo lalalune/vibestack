@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "vibelang --noEmit -p .",
+    "typecheck": "vibelang --noEmit -p . && vibelang --noEmit -p deploy/tsconfig.json",
     "test": "vitest run",
     "test:browser": "vitest run --project browser",
     "test:deploy": "vitest run -c deploy/vitest.config.ts"
