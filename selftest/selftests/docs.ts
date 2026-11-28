@@ -45,6 +45,7 @@ describe("the documents name what exists", () => {
       "packages/cli",
       "packages/cli/src/commands",
       "packages/cli/src/commands/index.ts",
+      "packages/cli/src/commands/deploy.ts",
       "packages/cli/test",
       "packages/ui",
       "packages/design-system",

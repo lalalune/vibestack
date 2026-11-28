@@ -1,0 +1,98 @@
+name: deploy-examples
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/**"
+      - "packages/vibestack/src/alchemy.ts"
+      - "packages/vibestack/src/gen/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy-examples.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "examples/**"
+      - "packages/vibestack/src/alchemy.ts"
+      - "packages/vibestack/src/gen/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy-examples.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-examples-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+
+env:
+  TURBO_TELEMETRY_DISABLED: "1"
+  ALCHEMY_FAST_DISTILLED: "1"
+
+jobs:
+  deploy:
+    name: example (${{ matrix.example }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [fullstack, order, dashboard, assistant]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+        with:
+          job: deploy-examples-${{ matrix.example }}
+          verification: "false"
+      - name: Build vibestack package for local file dependency
+        run: pnpm turbo run build --filter=vibestack
+      - name: Install, build, and verify example in offline workerd
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          pnpm install --frozen-lockfile --ignore-workspace
+          pnpm gen
+          pnpm build
+          pnpm test:deploy
+      - name: Restore Alchemy local state cache
+        if: >-
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository) &&
+          vars.ALCHEMY_STATE_STORE != 'cloudflare'
+        uses: actions/cache/restore@v6
+        with:
+          path: examples/${{ matrix.example }}/.alchemy/state
+          key: alchemy-state-example-${{ matrix.example }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'prod' }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            alchemy-state-example-${{ matrix.example }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'prod' }}-
+      - name: Deploy example to Cloudflare via Alchemy
+        id: alchemy-deploy
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        working-directory: examples/${{ matrix.example }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID || '50ad2052bbc6ca528d6993a689b419a4' }}
+          ALCHEMY_STATE_STORE: ${{ vars.ALCHEMY_STATE_STORE || '' }}
+          STAGE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'prod' }}
+        run: |
+          if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              echo "::notice::Skipping Alchemy preview deploy because CLOUDFLARE_API_TOKEN is not configured."
+              exit 0
+            fi
+            echo "::error::CLOUDFLARE_API_TOKEN secret is required to deploy examples/${{ matrix.example }} via Alchemy."
+            exit 1
+          fi
+          pnpm exec alchemy --fast-distilled deploy --stage "$STAGE" --adopt --yes --no-input
+          echo "deployed=true" >> "$GITHUB_OUTPUT"
+      - name: Save Alchemy local state cache
+        if: >-
+          steps.alchemy-deploy.outputs.deployed == 'true' &&
+          vars.ALCHEMY_STATE_STORE != 'cloudflare'
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: examples/${{ matrix.example }}/.alchemy/state
+          key: alchemy-state-example-${{ matrix.example }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'prod' }}-${{ github.sha }}-${{ github.run_attempt }}

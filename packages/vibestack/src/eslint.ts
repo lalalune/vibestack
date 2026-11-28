@@ -3,6 +3,7 @@ import { createRequire } from "node:module"
 import { dirname, join, matchesGlob, posix, resolve, sep } from "node:path"
 import { designSystem } from "./design/eslint.ts"
 import { parseTokens } from "./design/tokens.ts"
+import { TOOL_IGNORE_DIRS } from "./skill-links.ts"
 
 interface SourcePos {
   readonly line: number
@@ -132,11 +133,7 @@ const TYPE_DECL_EXTENSIONS: readonly string[] = [".d.ts", ".d.mts", ".d.cts"]
 const DEFAULT_SCAN_EXCLUDES: readonly string[] = [
   "**/node_modules/**",
   "**/.git/**",
-  "**/dist/**",
-  "**/gen/**",
-  "**/.spec-cache/**",
-  "**/.cache/**",
-  "**/.turbo/**",
+  ...TOOL_IGNORE_DIRS.map((dir) => `**/${dir}/**`),
   "**/storybook-static/**",
   "**/test/fixtures/**",
 ]
@@ -1177,18 +1174,12 @@ export interface VibestackConfigOptions {
 }
 
 const DEFAULT_IGNORES = [
-  "**/gen/",
-  "**/.vibe/",
-  "**/dist/",
-  "**/.cache/",
-  "**/.spec-cache/",
+  ...TOOL_IGNORE_DIRS.map((dir) => `**/${dir}/`),
   "**/generated/",
   "**/storybook-static/",
   "**/test/fixtures/",
   ".claude/",
   ".lemmascript/",
-  ".studio/",
-  ".turbo/",
   "_apalache-out/",
 ]
 

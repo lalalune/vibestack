@@ -33,6 +33,9 @@ export default {
       "project": [
         "selftest/**/*.ts"
       ],
+      "ignoreBinaries": [
+        "alchemy"
+      ],
       "ignoreDependencies": [
         "@antithesishq/bombadil",
         "@effect/platform-node",
@@ -54,6 +57,7 @@ export default {
     "packages/vibestack": {
       "entry": [
         "scripts/build.mjs",
+        "src/alchemy.ts",
         "src/spec.ts",
         "src/skill-links.ts",
         "src/design/cli.ts",
@@ -146,24 +150,41 @@ export default {
       ]
     },
     "apps/*": {
+      "entry": [
+        "alchemy.run.ts",
+        "deploy/**/*.ts"
+      ],
       "project": [
-        "src/**/*.{ts,tsx,vibe,vibex,css}"
+        "src/**/*.{ts,tsx,vibe,vibex,css}",
+        "alchemy.run.ts",
+        "deploy/**/*.ts"
       ],
       "ignoreDependencies": [
-        "tailwindcss"
+        "@alchemy.run/cloudflare",
+        "@alchemy.run/test",
+        "@effect/vitest",
+        "alchemy",
+        "effect",
+        "tailwindcss",
+        "vibestack"
       ]
     },
     "template/apps/*": {
       "entry": [
         "test/**/*.test.{ts,tsx,vibe}",
         "test/drivers/*.ts",
+        "deploy/**/*.ts",
         "src/**/*.{schema,contract}.{ts,vibe}"
       ],
       "project": [
         "src/**/*.{ts,tsx,vibe,vibex,css}",
-        "test/**/*.{ts,tsx,vibe,vibex}"
+        "test/**/*.{ts,tsx,vibe,vibex}",
+        "deploy/**/*.ts"
       ],
       "ignoreDependencies": [
+        "@alchemy.run/cloudflare",
+        "@alchemy.run/test",
+        "alchemy",
         "tailwindcss",
         "vibestack"
       ]

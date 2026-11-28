@@ -84,6 +84,7 @@ Pull requests go to `main`, the only long-lived branch; what CI runs on them is 
 | `packages/vibestack/src/testing/` | what packages import via `vibestack/testing*`: `project()` (the Vitest configuration), the property-test generator, `effectDriver`, `planModel`, `runModel` |
 | `packages/vibestack/src/stories/`, `packages/vibestack/src/design/` | generated stories and their tests; design tokens and their lint rules. The design project module in [`packages/vibestack/src/design/project.ts`](packages/vibestack/src/design/project.ts) builds or checks several token directories in one process |
 | `packages/vibestack/src/eslint.ts` | `withWorkspaceBarrels` and `vibestackConfig`: ESLint rules enforcing barrel-only workspace `exports` and imports plus a reusable downstream preset |
+| `packages/vibestack/src/alchemy.ts` | `vibestack/alchemy`: zero-dep Node 26 helpers for Alchemy v2 (`resolveStage`, `assertStageGuard`, `hashAssetDirectory`, `verifyDeploymentEndpoints`, `createR2BucketClient`, `makeR2BucketObjects`) |
 | `packages/vibestack/src/formal.ts` | `vibestack/formal`: `check`, `conformance`, `explore`, `precomputeSimulations`, `prepareSimulationReceipts`, `readSpecs`, `withFormalCache`, `show` |
 | `packages/vibestack/src/gen.ts` | the translator: reads what a module imports and defines |
 | `packages/vibestack/src/gen/types.ts` | everything decided by a type |

@@ -35,11 +35,14 @@ import { conformance as checkTraces, conformanceFound } from "../packages/vibest
 import { explore, explored, pageInputs } from "../packages/vibestack/src/explore.ts";
 import { harnessFiles, search, simulate, simulation } from "../packages/vibestack/src/simulate.ts";
 import { acceptContracts, acceptReviews, NODE, check, checkVerifiedSource, danglingCitations, expandListHelpers, generated, init, parseSpec, pending, pendingContracts, readSpecs, replay, show, typecheckAll, type Result, type Spec } from "../packages/vibestack/src/pipeline.ts";
+import { assertStageGuard, createR2BucketClient, hashAssetDirectory, makeR2BucketObjects, resolveStage, StageGuardError, verifyDeploymentEndpoints } from "../packages/vibestack/src/alchemy.ts";
+import { checkAlchemy } from "../packages/vibestack/src/doctor.ts";
+import { GITIGNORE_ENTRIES } from "../packages/vibestack/src/upgrade.ts";
 
 const project = path.join(import.meta.dirname, "..");
 isolatedInstalls();
 const harnessSkillPaths = [".claude/skills", ".codex/skills", ".cursor/skills", ".droid/skills", ".factory/skills", ".gemini/skills", ".grok/skills", ".grokbot/skills", ".muse/skills", ".t3/skills"];
-const scaffoldedIgnores = ["gen/", ".spec-cache/", ".studio/", "dist/", ".vibe/", ".cache/", ".turbo/", "test/__traces__/", "/.claude/", "/CLAUDE.md", ...harnessSkillPaths.filter((alias) => !alias.startsWith(".claude/")).map((alias) => `/${alias}`)];
+const scaffoldedIgnores = [...GITIGNORE_ENTRIES];
 const EXAMPLES = "examples";
 const EXAMPLE = path.join(project, EXAMPLES, "order");
 const read = (file: string, from = project): string => fs.readFileSync(path.join(from, file), "utf8");
@@ -5767,4 +5770,163 @@ test("custom spec.dir accept/check round-trip with citations, -- separator for -
   assert.match(proofFailRes.stdout, /skipped\s+tests, traces and explore/);
   assert.doesNotMatch(proofFailRes.stdout, /timings:[\s\S]*\btests\b/, "failed proof must not emit tests phase timing");
   assert.equal(fs.existsSync(path.join(proofFailRoot, "ran-tests.marker")), false, "failed proof must not execute test script");
+});
+
+test("alchemy helpers, R2 state client, gitignore entries, and doctor preflight", async () => {
+  assert.equal(GITIGNORE_ENTRIES.includes(".alchemy/"), true);
+  assert.equal(GITIGNORE_ENTRIES.includes(".wrangler/"), true);
+
+  const devStage = resolveStage({ cwd: project, env: { USER: "Alice.Dev" } });
+  assert.equal(devStage.kind, "dev");
+  assert.match(devStage.stage, /^dev_alice-dev_/);
+  const testStage = resolveStage({ mode: "test", cwd: project, env: { USER: "Bob" } });
+  assert.equal(testStage.kind, "test");
+  assert.match(testStage.stage, /^test_bob_/);
+  const prStage = resolveStage({ cwd: project, env: { GITHUB_EVENT_NAME: "pull_request", PR_NUMBER: "42" } });
+  assert.deepEqual(prStage, { kind: "preview", stage: "pr-42", pr: 42 });
+  const prodStage = resolveStage({ stage: "prod", cwd: project, env: {} });
+  assert.deepEqual(prodStage, { kind: "production", stage: "production" });
+
+  assert.throws(
+    () => assertStageGuard(prStage, { resourceIds: { db: "prod-db-1" }, productionIds: ["prod-db-1"] }),
+    StageGuardError,
+  );
+  assert.throws(
+    () => assertStageGuard(devStage, { domains: ["https://vibestack.fun/"], productionDomains: ["vibestack.fun"] }),
+    StageGuardError,
+  );
+  assert.doesNotThrow(() => assertStageGuard(prodStage, { domains: ["vibestack.fun"], productionDomains: ["vibestack.fun"] }));
+
+  const assetRoot = scratch({
+    "b.txt": "beta",
+    "a/index.html": "<html>ok</html>",
+    ".DS_Store": "ignored",
+  });
+  const hashed1 = hashAssetDirectory(assetRoot);
+  const hashed2 = hashAssetDirectory(assetRoot);
+  assert.equal(hashed1.hash, hashed2.hash);
+  assert.equal(hashed1.fileCount, 2);
+  assert.equal(hashed1.directory, hashed1.path);
+  fs.writeFileSync(path.join(assetRoot, "b.txt"), "gamma");
+  assert.notEqual(hashAssetDirectory(assetRoot).hash, hashed1.hash);
+
+  let verifyAttempts = 0;
+  const verified = await verifyDeploymentEndpoints(
+    "https://example.test",
+    [
+      { path: "/health", expectedStatus: 200, expectedCommitSha: "abc1234", expectJson: (v) => typeof v === "object" && v !== null && (v as { ok?: boolean }).ok === true },
+    ],
+    {
+      maxAttempts: 3,
+      initialDelayMs: 0,
+      sleep: () => Promise.resolve(),
+      fetch: () => {
+        verifyAttempts += 1;
+        if (verifyAttempts === 1) return Promise.resolve(new Response("warming", { status: 503 }));
+        return Promise.resolve(new Response(JSON.stringify({ ok: true, commitSha: "abc1234deadbeef" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }));
+      },
+    },
+  );
+  assert.equal(verified.ok, true);
+  assert.equal(verifyAttempts, 2);
+
+  const shaMismatch = await verifyDeploymentEndpoints(
+    "https://example.test",
+    [{ path: "/health", expectedStatus: 200, expectJson: (v) => typeof v === "object" && v !== null }],
+    {
+      commitSha: "expected-sha",
+      maxAttempts: 1,
+      throwOnFailure: false,
+      fetch: () => Promise.resolve(new Response(JSON.stringify({ ok: true, commitSha: "wrong-sha" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })),
+    },
+  );
+  assert.equal(shaMismatch.ok, false);
+  assert.match(shaMismatch.probes[0]?.error ?? "", /expected commit SHA "expected-sha"/);
+
+  const r2Store = new Map<string, { text: string; etag: string }>();
+  const s3Client = createR2BucketClient({
+    kind: "s3",
+    accountId: "acct123",
+    bucket: "state-bucket",
+    accessKeyId: "AKIAEXAMPLE",
+    secretAccessKey: "SECRETEXAMPLE",
+    fetch: (input, init) => {
+      assert.ok(init?.signal instanceof AbortSignal);
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+      const headers = new Headers(init?.headers);
+      assert.match(headers.get("authorization") ?? "", /^AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE\/\d{8}\/auto\/s3\/aws4_request/);
+      const method = init?.method ?? "GET";
+      const key = decodeURIComponent(url.pathname.replace(/^\/state-bucket\/?/, ""));
+      if (method === "GET" && url.searchParams.get("list-type") === "2") {
+        const prefix = url.searchParams.get("prefix") ?? "";
+        const delimiter = url.searchParams.get("delimiter");
+        const matched = [...r2Store.keys()].filter((k) => k.startsWith(prefix)).sort();
+        if (delimiter) {
+          const children = [...new Set(matched.map((k) => k.slice(prefix.length).split(delimiter)[0]).filter(Boolean))];
+          const body = `<ListBucketResult><IsTruncated>false</IsTruncated>${children.map((c) => `<CommonPrefixes><Prefix>${prefix}${c}${delimiter}</Prefix></CommonPrefixes>`).join("")}</ListBucketResult>`;
+          return Promise.resolve(new Response(body, { status: 200 }));
+        }
+        const body = `<ListBucketResult><IsTruncated>false</IsTruncated>${matched.map((k) => `<Contents><Key>${k.replaceAll("/", "&#x2F;")}</Key></Contents>`).join("")}</ListBucketResult>`;
+        return Promise.resolve(new Response(body, { status: 200 }));
+      }
+      if (method === "PUT") {
+        const existing = r2Store.get(key);
+        if (headers.get("if-none-match") === "*" && existing) return Promise.resolve(new Response("", { status: 412 }));
+        if (headers.get("if-match") && existing?.etag !== headers.get("if-match")) return Promise.resolve(new Response("", { status: 412 }));
+        const text = typeof init?.body === "string" ? init.body : "";
+        const etag = `"v${String(r2Store.size + 1)}"`;
+        r2Store.set(key, { text, etag });
+        return Promise.resolve(new Response("", { status: 200, headers: { etag } }));
+      }
+      if (method === "GET") {
+        const found = r2Store.get(key);
+        if (!found) return Promise.resolve(new Response("", { status: 404 }));
+        return Promise.resolve(new Response(found.text, { status: 200, headers: { etag: found.etag } }));
+      }
+      if (method === "DELETE") {
+        const existing = r2Store.get(key);
+        if (headers.get("if-match") && existing?.etag !== headers.get("if-match")) return Promise.resolve(new Response("", { status: 412 }));
+        r2Store.delete(key);
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return Promise.resolve(new Response("", { status: 405 }));
+    },
+  });
+  const leaseEtag = await s3Client.write("stack/prod/__lease__.json", '{"token":"a"}', { ifAbsent: true });
+  assert.ok(leaseEtag);
+  assert.equal(await s3Client.write("stack/prod/__lease__.json", '{"token":"b"}', { ifAbsent: true }), undefined);
+  assert.deepEqual(await s3Client.listChildren("stack/"), ["prod"]);
+  assert.deepEqual(await s3Client.listKeys("stack/prod/"), ["stack/prod/__lease__.json"]);
+  assert.equal((await s3Client.read("stack/prod/__lease__.json"))?.version, leaseEtag);
+  await s3Client.delete("stack/prod/__lease__.json", leaseEtag);
+  assert.equal(await s3Client.read("stack/prod/__lease__.json"), undefined);
+
+  const Effect = await import("effect/Effect");
+  const wrappedObjects = makeR2BucketObjects(
+    {
+      kind: "api",
+      accountId: "acct123",
+      bucket: "state-bucket",
+      apiToken: "cf-token",
+      fetch: () => Promise.resolve(new Response(JSON.stringify({ success: true, result: [{ key: "a/b.json" }], result_info: { is_truncated: false } }), { status: 200 })),
+    },
+    {
+      tryPromise: Effect.tryPromise,
+      makeError: ({ message }) => new Error(message),
+    },
+  );
+  assert.deepEqual(await Effect.runPromise(wrappedObjects.listKeys("a/")), ["a/b.json"]);
+
+  const plainRoot = scratch({ "package.json": '{"name":"plain","private":true}\n' });
+  assert.equal(checkAlchemy(plainRoot, {}), undefined);
+  const alchemyRoot = scratch({ "package.json": '{"name":"cf-app","devDependencies":{"alchemy":"2.0.0-beta.85"}}\n', "alchemy.run.ts": "export default {};\n" });
+  const alchemyOffline = checkAlchemy(alchemyRoot, {});
+  assert.equal(alchemyOffline?.name, "alchemy");
+  assert.equal(alchemyOffline?.status, "warn");
 });

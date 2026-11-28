@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:cf": "ALCHEMY_FAST_DISTILLED=1 alchemy dev",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy": "ALCHEMY_FAST_DISTILLED=1 alchemy deploy --yes --no-input",
+    "deploy:plan": "ALCHEMY_FAST_DISTILLED=1 alchemy plan",
+    "test:deploy": "vitest run -c deploy/vitest.config.ts"
   },
   "dependencies": {
     "@repo/design-system": "workspace:*",
@@ -16,12 +20,20 @@
     "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@alchemy.run/cloudflare": "catalog:",
+    "@alchemy.run/test": "catalog:",
+    "@effect/vitest": "catalog:",
     "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "alchemy": "catalog:",
+    "effect": "catalog:",
     "tailwindcss": "catalog:",
     "typescript": "catalog:",
-    "vite": "catalog:"
+    "vibestack": "workspace:*",
+    "vite": "catalog:",
+    "vitest": "catalog:"
   }
 }

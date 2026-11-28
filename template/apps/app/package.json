@@ -8,7 +8,8 @@
     "build": "vite build",
     "typecheck": "vibelang --noEmit -p .",
     "test": "vitest run",
-    "test:browser": "vitest run --project browser"
+    "test:browser": "vitest run --project browser",
+    "test:deploy": "vitest run -c deploy/vitest.config.ts"
   },
   "dependencies": {
     "@repo/design-system": "workspace:*",
@@ -19,6 +20,8 @@
     "vibelang-runtime": "catalog:"
   },
   "devDependencies": {
+    "@alchemy.run/cloudflare": "catalog:",
+    "@alchemy.run/test": "catalog:",
     "@antithesishq/bombadil": "catalog:",
     "@effect/vitest": "catalog:",
     "@tailwindcss/vite": "catalog:",
@@ -27,6 +30,7 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "@vitest/browser-playwright": "catalog:",
+    "alchemy": "catalog:",
     "happy-dom": "catalog:",
     "playwright": "catalog:",
     "tailwindcss": "catalog:",
